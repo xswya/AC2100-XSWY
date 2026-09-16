@@ -21,6 +21,9 @@ env:
   BOARD_ID: RM2100
   TZ: Asia/Shanghai
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: 编译 Padavan 固件
