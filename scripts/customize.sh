@@ -224,14 +224,14 @@ update_subscription() {
     fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
-        # 彻底清理原配置中可能存在的重复顶层 key，防止 Mihomo 解析 YAML 报 duplicate mapping key 致命退出
-        sed -i '/^[[:space:]]*external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*secret:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*allow-lan:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*mode:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^[[:space:]]*log-level:/d' "${TMP_CONF}" 2>/dev/null || true
+        # 仅删除顶层(无前导空格)的重复 key，保护嵌套在 proxies 节点中的 mode:/secret: 等字段不被误伤
+        sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^secret:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^allow-lan:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^mode:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^log-level:/d' "${TMP_CONF}" 2>/dev/null || true
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
@@ -263,10 +263,14 @@ case "$1" in
             exit 0
         fi
 
-        # 如果已有订阅链接但无配置文件，尝试拉取
+        # 每次启动/重启都检查订阅链接，确保用户更换订阅后能即时生效
         SUB_URL="$(nvram get ss_server)"
-        if [ ! -f "${CONF_FILE}" ] && [ -n "${SUB_URL}" ]; then
-            update_subscription "${SUB_URL}" || true
+        if [ -n "${SUB_URL}" ]; then
+            case "${SUB_URL}" in
+                http://*|https://*)
+                    update_subscription "${SUB_URL}" || true
+                    ;;
+            esac
         fi
 
         # 生成极简健壮备用配置（零外部远程规则依赖，确保 100% 成功启动并监听 9999 端口）
@@ -302,10 +306,17 @@ rules:
 YAMLEOF
         fi
 
+        # 启动前清理残余进程与旧 PID，截断过大日志防止写满 tmpfs
+        killall CrashCore 2>/dev/null || true
+        rm -f "${PID_FILE}"
+        if [ -f "${LOG_FILE}" ] && [ "$(wc -c < "${LOG_FILE}" 2>/dev/null || echo 0)" -gt 131072 ]; then
+            tail -c 65536 "${LOG_FILE}" > "${LOG_FILE}.tmp" 2>/dev/null && mv -f "${LOG_FILE}.tmp" "${LOG_FILE}" || true
+        fi
+
         echo "启动 Mihomo (Clash Meta) 核心并监听控制端口 ${PORT_UI}..."
         "${RO_DIR}/CrashCore" -d "${CRASH_DIR}" -f "${CONF_FILE}" > "${LOG_FILE}" 2>&1 &
         echo $! > "${PID_FILE}"
-        sleep 1
+        sleep 2
 
         # 检测核心是否正常存活
         if kill -0 $(cat "${PID_FILE}" 2>/dev/null) 2>/dev/null; then
@@ -365,6 +376,7 @@ romfs:
 	chmod +x $(ROMFSDIR)/etc_ro/ShellCrash/CrashCore
 	$(ROMFSINST) -p +x $(THISDIR)/shellcrash-service.sh /usr/bin/shellcrash-service.sh
 	$(ROMFSINST) -p +x $(THISDIR)/smartdns_start.sh /usr/bin/smartdns_start.sh
+	$(ROMFSINST) -p +x $(THISDIR)/post_wan_init.sh /usr/bin/post_wan_init.sh
 	ln -sf /etc_ro/ShellCrash/CrashCore $(ROMFSDIR)/usr/bin/CrashCore
 	ln -sf /usr/bin/shellcrash-service.sh $(ROMFSDIR)/usr/bin/crash
 EOF
@@ -464,18 +476,20 @@ function initial(){
 
 function checkCrashStatus(){
     var host = window.location.hostname;
-    $j.ajax({
-        url: 'http://' + host + ':9999/',
-        type: 'GET',
-        dataType: 'json',
-        timeout: 2000,
-        success: function(data){
-            $j('#crash_status').html('<span class="label label-success" style="padding: 4px 8px;">● 核心运行中 (Mihomo/Meta)</span>');
-        },
-        error: function(){
+    var done = false;
+    var img = new Image();
+    img.onload = img.onerror = function(){
+        if (done) return;
+        done = true;
+        $j('#crash_status').html('<span class="label label-success" style="padding: 4px 8px;">● 核心运行中 (Mihomo/Meta)</span>');
+    };
+    setTimeout(function(){
+        if (!done) {
+            done = true;
             $j('#crash_status').html('<span class="label label-warning" style="padding: 4px 8px;">● 未就绪 / 启动中</span>');
         }
-    });
+    }, 3000);
+    img.src = 'http://' + host + ':9999/version?_t=' + Date.now();
 }
 
 function openWebUI(){
@@ -694,12 +708,54 @@ esac
 SDNSEOF
 chmod +x "${SC_PKG_DIR}/smartdns_start.sh"
 
-# 将 SmartDNS 自启动与网络内核优化注入到默认 post_wan_script.sh (mtd_storage.sh)
+# 生成独立的系统自启初始化脚本 (取代原来的超长单行 sed 注入，极大提升可维护性)
+cat > "${SC_PKG_DIR}/post_wan_init.sh" <<'INITEOF'
+#!/bin/sh
+# ==============================================================================
+# 系统 WAN 就绪后自动执行的初始化任务
+# 由 mtd_storage.sh 中的 post_wan_script.sh 调用
+# ==============================================================================
+
+### 网络内核参数高并发优化
+sysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true
+sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
+sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
+
+### 启动 SmartDNS DNS 加速服务
+[ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &
+
+### 自动初始化 OpenSSH 环境与主机密钥 (保证新固件开箱即用)
+if [ ! -f /etc/storage/openssh/sshd_config ]; then
+    mkdir -p /etc/storage/openssh
+    cat > /etc/storage/openssh/sshd_config <<'SEOF'
+Port 22
+ListenAddress 0.0.0.0
+ListenAddress ::
+Protocol 2
+HostKey /etc/storage/openssh/ssh_host_rsa_key
+HostKey /etc/storage/openssh/ssh_host_ecdsa_key
+HostKey /etc/storage/openssh/ssh_host_ed25519_key
+PermitRootLogin yes
+PasswordAuthentication yes
+Subsystem sftp /usr/libexec/sftp-server
+SEOF
+    ssh-keygen -t rsa -b 2048 -f /etc/storage/openssh/ssh_host_rsa_key -N '' 2>/dev/null || true
+    ssh-keygen -t ecdsa -f /etc/storage/openssh/ssh_host_ecdsa_key -N '' 2>/dev/null || true
+    ssh-keygen -t ed25519 -f /etc/storage/openssh/ssh_host_ed25519_key -N '' 2>/dev/null || true
+    chmod 600 /etc/storage/openssh/ssh_host_* 2>/dev/null || true
+    mtd_storage.sh save
+    killall sshd 2>/dev/null || true
+    /usr/sbin/sshd 2>/dev/null || true
+fi
+INITEOF
+chmod +x "${SC_PKG_DIR}/post_wan_init.sh"
+
+# 将 post_wan_init.sh 注入到默认 post_wan_script.sh (mtd_storage.sh)
 STORAGE_SH="${WORK_DIR}/trunk/user/scripts/mtd_storage.sh"
 if [ -f "${STORAGE_SH}" ]; then
-    if ! grep -q "smartdns_start.sh" "${STORAGE_SH}"; then
-        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n\n### 网络内核参数高并发优化\nsysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true\nsysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true\nsysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true\n\n### 启动 SmartDNS DNS 加速服务\n[ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &\n\n### 自动初始化 OpenSSH 环境与主机密钥 (保证新固件开箱即用)\nif [ ! -f /etc/storage/openssh/sshd_config ]; then\n\tmkdir -p /etc/storage/openssh\n\tcat > /etc/storage/openssh/sshd_config <<'\''SEOF'\''\nPort 22\nListenAddress 0.0.0.0\nListenAddress ::\nProtocol 2\nHostKey /etc/storage/openssh/ssh_host_rsa_key\nHostKey /etc/storage/openssh/ssh_host_ecdsa_key\nHostKey /etc/storage/openssh/ssh_host_ed25519_key\nPermitRootLogin yes\nPasswordAuthentication yes\nSubsystem sftp /usr/libexec/sftp-server\nSEOF\n\tssh-keygen -t rsa -b 2048 -f /etc/storage/openssh/ssh_host_rsa_key -N '\'''\'' 2>/dev/null || true\n\tssh-keygen -t ed25519 -f /etc/storage/openssh/ssh_host_ed25519_key -N '\'''\'' 2>/dev/null || true\n\tchmod 600 /etc/storage/openssh/ssh_host_* 2>/dev/null || true\n\tmtd_storage.sh save\n\tkillall sshd 2>/dev/null || true\n\t/usr/sbin/sshd 2>/dev/null || true\nfi\n' "${STORAGE_SH}" || true
-        echo "    已将 SmartDNS 自启动、网络调优与 OpenSSH 自愈注入到 mtd_storage.sh"
+    if ! grep -q "post_wan_init.sh" "${STORAGE_SH}"; then
+        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n[ -x /usr/bin/post_wan_init.sh ] \&\& /usr/bin/post_wan_init.sh\n' "${STORAGE_SH}" || true
+        echo "    已将 post_wan_init.sh 调用注入到 mtd_storage.sh"
     fi
 fi
 
