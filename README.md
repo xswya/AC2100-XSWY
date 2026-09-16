@@ -61,24 +61,38 @@
 
 ## 科学上网使用说明
 
-### 1. 使用 Shadowsocks / ShadowsocksR
-直接登录路由器 WebUI，进入左侧菜单：**Shadowsocks**，填入您的服务器地址、端口、加密方式与密码，选择工作模式（推荐「绕过大陆」或「GFWList」），点击应用即可。
+### 推荐方案：一键启用 ShellCrash (Clash Meta / Mihomo 核心，强烈推荐)
+这是目前在 Padavan 路由器上**体验最完美、功能最强大**的科学上网方式：
+- **支持所有订阅链接**：直接粘贴机场提供的 Clash / V2Ray / 通用订阅链接，自动拉取节点并定时更新。
+- **全协议支持**：支持 Shadowsocks、VLESS (REALITY/Vision)、VMess、Trojan、Hysteria2 等现代主流协议。
+- **自带精美 Web 图形面板**：通过浏览器直接可视化测速、切换节点、实时查看网络延迟与流量。
 
-### 2. 使用 Xray (VLESS / REALITY / VMess)
-固件已内置 `/usr/bin/xray` 及透明代理控制脚本 `/usr/bin/xray-run.sh`：
-1. **配置节点**：
-   - 登录路由器 WebUI 终端（或 SSH 连接 `192.168.123.1`，账号 `admin`）。
-   - 编辑配置文件 `/etc/storage/xray/config.json`（预置了标准模板，填入您的节点即可）。
-   - 保存配置到 Flash：`mtd_storage.sh save`。
-2. **启动与停止**：
-   - 启动透明代理：`/usr/bin/xray-run.sh start`
-   - 停止透明代理：`/usr/bin/xray-run.sh stop`
-   - 查看运行状态：`/usr/bin/xray-run.sh status`
-3. **开机自启动**：
-   - 在 WebUI 菜单「高级设置」->「系统管理」->「自定义设置」->「在网络连接建立后执行」脚本末尾添加一行：
-     ```bash
-     /usr/bin/xray-run.sh start &
-     ```
+#### 安装与使用步骤：
+1. **打开终端**：
+   - 登录路由器 Web 管理页面（`192.168.123.1`），进入左侧菜单：**「高级设置」->「系统管理」->「终端」 (TTYD)**（或者电脑使用 SSH 连接 `192.168.123.1`，账号 `admin`，密码 `admin`）。
+2. **执行一键安装命令**：
+   在终端中粘贴以下命令并回车：
+   ```bash
+   export url='https://fastly.jsdelivr.net/gh/juewuy/ShellCrash@master' && sh -c "$(curl -kfsSl $url/install.sh)" && source /etc/profile &> /dev/null
+   ```
+   > 如遇网络波动，可使用备用安装源：
+   > ```bash
+   > export url='https://gh.jwsc.eu.org/master' && sh -c "$(curl -kfsSl $url/install.sh)" && source /etc/profile &> /dev/null
+   > ```
+3. **安装选项选择**：
+   - 安装路径选择：输入数字推荐的选项（通常选小内存设备的 `/tmp` 或 `/etc/storage` 对应选项）。
+   - 安装完成后，在终端直接输入 `crash` 并回车即可呼出管理菜单。
+4. **导入订阅与启动**：
+   - 在菜单中选择 `[1] 导入配置文件/订阅` -> 选择 `[1] 在线获取完整配置文件`。
+   - 粘贴您的机场订阅链接，回车确认。
+   - 配置获取成功后，按提示启动服务。
+5. **打开 WebUI 图形化面板**：
+   - 在局域网任意电脑或手机浏览器打开：`http://192.168.123.1:9999/ui`
+   - 可以在页面上自由切换节点、测速、选择「规则模式 / 全局模式」，所有连接本路由器的设备自动实现智能分流翻墙！
+
+---
+
+### 备用方案：使用原生单节点配置 (Shadowsocks / Xray)
 
 ---
 

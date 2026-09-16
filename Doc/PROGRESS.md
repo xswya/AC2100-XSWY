@@ -25,6 +25,8 @@
   - [x] 修复措施：切换使用官方成熟且经过长期验证的 OpenSSH 方案（自带 sftp-server 支持），并在构建脚本中双重补全 dropbear 头文件路径。
   - [x] 修复措施：改用 GitHub Release 官方直链 `releases/latest/download` 方式下载 Xray，彻底规避 API 限流导致的 zip 文件损坏。
   - [x] 在工作流中声明 `permissions: contents: write`，解除 GitHub Releases 发布的 403 权限限制。
+  - [x] **GitHub Actions 全绿构建成功 (Run 35055629773)**！固件已发布至 Releases 与 Artifacts。
+  - [x] 确立在极简高性能 Padavan 下配合 ShellCrash（Mihomo/Clash 核心）的订阅管理方案，更新教程指南。
 
 ---
 
