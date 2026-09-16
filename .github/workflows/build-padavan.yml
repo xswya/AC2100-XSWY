@@ -1,0 +1,107 @@
+name: Build Padavan for Redmi AC2100 (RM2100)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '是否发布到 GitHub Releases'
+        required: false
+        default: 'true'
+        type: boolean
+  push:
+    paths:
+      - 'configs/**'
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/build-padavan.yml'
+
+env:
+  SRC_REPO: https://github.com/hanwckf/rt-n56u.git
+  SRC_BRANCH: master
+  BOARD_ID: RM2100
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: 编译 Padavan 固件
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出当前配置仓库
+        uses: actions/checkout@v4
+
+      - name: 初始化编译依赖环境
+        run: |
+          sudo timedatectl set-timezone "$TZ"
+          sudo apt-get update
+          sudo apt-get install -y \
+            unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot \
+            kmod cpio git python3-docutils gettext automake autopoint texinfo \
+            build-essential help2man pkg-config zlib1g-dev libgmp3-dev libmpc-dev \
+            libmpfr-dev libncurses5-dev libltdl-dev wget libc-dev-bin upx
+
+      - name: 拉取 hanwckf/rt-n56u 源码
+        run: |
+          git clone --depth=1 -b "$SRC_BRANCH" "$SRC_REPO" /opt/rt-n56u
+
+      - name: 准备 hanwckf 官方预编译工具链
+        run: |
+          cd /opt/rt-n56u/toolchain-mipsel
+          sh dl_toolchain.sh
+          ls -la toolchain-3.4.x/bin
+
+      - name: 应用超频补丁与精简定制 (Shadowsocks & Xray)
+        run: |
+          chmod +x scripts/customize.sh
+          ./scripts/customize.sh /opt/rt-n56u
+
+      - name: 编译红米 AC2100 (RM2100) 固件
+        run: |
+          cd /opt/rt-n56u/trunk
+          fakeroot ./build_firmware_modify "$BOARD_ID" 0
+
+      - name: 整理并生成固件发布包
+        id: organize
+        run: |
+          mkdir -p release_firmware
+          cp -f /opt/rt-n56u/trunk/images/*.trx release_firmware/
+          cd release_firmware
+          
+          # 计算校验和与生成说明
+          BUILD_TIME=$(date +"%Y%m%d_%H%M")
+          for file in *.trx; do
+            NEW_NAME="RM2100_1000MHz_Slim_${BUILD_TIME}.trx"
+            mv "$file" "$NEW_NAME"
+            md5sum "$NEW_NAME" > "${NEW_NAME}.md5"
+            sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
+          done
+          
+          echo "BUILD_TIME=${BUILD_TIME}" >> $GITHUB_OUTPUT
+          echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_OUTPUT
+          ls -la
+
+      - name: 上传固件至 Actions 产物 (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: RM2100-Padavan-1000MHz-${{ steps.organize.outputs.BUILD_TIME }}
+          path: release_firmware/
+          retention-days: 30
+
+      - name: 发布至 GitHub Releases
+        if: ${{ github.event.inputs.release == 'true' || github.event_name == 'push' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: RM2100-${{ steps.organize.outputs.BUILD_TIME }}
+          name: "红米 AC2100 Padavan 1000MHz 极简稳定版 (${{ steps.organize.outputs.BUILD_TIME }})"
+          body: |
+            ### 固件定制特性说明
+            - **CPU 超频**: 锁定 1000MHz (1.0 GHz)，大幅提升带机与加解密性能
+            - **极致精简**: 剔除 USB、Samba、Aria2、Transmission、校园网认证等无用后台
+            - **稳定高效**: 启用 SFE 快捷转发加速、IPv6/NAPT66、Dropbear 轻量 SSH
+            - **科学上网**: 内置 Shadowsocks / ShadowsocksR 原生支持与轻量优化版 Xray 核心 (`/usr/bin/xray`)
+            
+            ### 刷机建议
+            - 建议在 **Breed Web 恢复控制台** 下刷入 `.trx` 固件。
+            - 默认管理地址: `192.168.123.1`，用户名: `admin`，密码: `admin`，无线密码: `1234567890`。
+          files: release_firmware/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
