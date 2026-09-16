@@ -36,7 +36,7 @@
   - [x] **自启动与生命周期联动**：在 `mtd_storage.sh` 中将 SmartDNS 自动注入 `post_wan_script.sh`；同时在 `shadowsocks.sh start` 时双重保险激活 SmartDNS。
   - [x] **轻量广告拦截 (Anti-AD)**：在 Mihomo 配置模板中引入 anti-ad 精选规则集，零额外二进制体积消耗实现网络层去广告与防隐私追踪。
   - [x] **网络内核参数调优**：将连接跟踪上限提升至 `nf_conntrack_max=65536`，开启 `tcp_fastopen=3` 和 `tcp_tw_reuse=1`，确保大并发流量稳定不丢包。
-  - [x] **轻量组件升级**：启用 `VLMCSD` (KMS 服务)； Dropbear 替换 OpenSSH 释放 500KB 固件空间。
+  - [x] **轻量组件升级**：启用 `VLMCSD` (KMS 激活服务)；保持官方充分验证的 `OpenSSH` 方案（支持 sftp-server，WinSCP 友好）。
   - [x] **文档与 CI 升级**：更新 `build-padavan.yml` 和 `README.md`，同步全部新特性与刷机指引。
 
 ---

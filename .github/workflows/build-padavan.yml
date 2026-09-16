@@ -103,7 +103,7 @@ jobs:
             - **广告拦截**: 集成 Anti-AD 规则集，轻量高效拦截全网恶意广告与隐私追踪
             - **内核调优**: 优化网络并发连接跟踪 (`nf_conntrack_max=65536`)、启用 TCP Fast Open 与连接复用
             - **极致精简**: 剔除 USB、Samba、Aria2、Transmission、校园网认证等无用后台，体积严控在 16~17MB 安全区间
-            - **实用功能**: 启用 SFE 快捷转发加速、IPv6/NAPT66、Dropbear 轻量 SSH、VLMCSD (KMS 激活)、TTYD 网页终端
+            - **实用功能**: 启用 SFE 快捷转发加速、IPv6/NAPT66、OpenSSH (支持 SFTP/WinSCP 直接管理)、VLMCSD (KMS 激活)、TTYD 网页终端
             
             ### 刷机建议
             - 建议在 **Breed Web 恢复控制台** (选择“小米路由3G/AC2100”公版或通用闪存布局) 下直接刷入 `.trx` 固件。

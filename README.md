@@ -13,7 +13,7 @@
    - 物理无 USB 接口，彻底裁撤所有 USB 驱动与守护进程（降低系统调用开销与内核内存）。
    - 剥离 Samba/WINS、Aria2、Transmission、MiniDLNA、Firefly、xUPNPd 等重型文件共享/媒体服务。
    - 剥离各种校园网认证协议客户端（Dogcom, MinieAP, MentoHUST 等）。
-   - 替换 OpenSSH 为极轻量的 **Dropbear**（启用快速对称算法）。
+   - 采用官方验证最成熟的 **OpenSSH**（集成 sftp-server 支持，WinSCP 可直接可视化拖拽管理系统文件）。
    - 保留与优化：SFE（Shortcut-FE 快捷转发，千兆跑满）、IPv6/NAPT66、HTTPS、IPSet、TTYD 网页终端。
 
 2. **CPU 硬件超频至 1000 MHz**：

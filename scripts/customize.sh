@@ -710,10 +710,6 @@ esac
 EOF
 chmod +x "${SS_SH}"
 
-# 修复 dropbear 构建依赖路径双保险
-if [ -f "${WORK_DIR}/trunk/user/dropbear/Makefile" ]; then
-    sed -i 's|\./configure \\|CFLAGS="$(CFLAGS) -I$(STAGEDIR)/include" LDFLAGS="$(LDFLAGS) -L$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
-fi
 
 echo ">>> [9/9] 优化完成总结:"
 echo "    ✓ CPU 超频 1000MHz"
