@@ -5,9 +5,10 @@
 # 功能描述: 自动化源码定制脚本
 #   1. 注入 MT7621 CPU 1000MHz 寄存器超频补丁
 #   2. 部署精简版单板编译配置 (RM2100.config)
-#   3. 集成 ShellCrash 框架 + Mihomo (Clash Meta) 核心 + MetaCubeXD WebUI
-#   4. 深度升级老毛子 WebUI：原生支持直接粘贴订阅、一键测速与内嵌仪表盘
-#   5. 对接 shadowsocks.sh 生命周期，开箱即用稳定透明代理
+#   3. 集成 ShellCrash 框架 + Mihomo (Clash Meta) 核心 + Yacd WebUI
+#   4. 修改 Padavan 菜单字典标签，将 "shadowsocks" 改为 "科学上网"
+#   5. 用 Padavan 原生布局重写 Shadowsocks.asp 科学上网控制台
+#   6. 对接 shadowsocks.sh 生命周期，利用 ss_server 借壳存储订阅链接
 # ==============================================================================
 
 set -eo pipefail
@@ -16,13 +17,15 @@ WORK_DIR="${1:-$(pwd)}"
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches"
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/configs"
 
-echo ">>> [1/6] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
+echo ">>> [1/7] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
 echo "    源码目录: ${WORK_DIR}"
 
 cd "${WORK_DIR}"
 
+# ==============================================================================
 # 1. 注入 1000MHz 超频补丁
-echo ">>> [2/6] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
+# ==============================================================================
+echo ">>> [2/7] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
 if [ -f "${PATCH_DIR}/001-mt7621-1000mhz.patch" ]; then
     if patch -p1 -N --dry-run < "${PATCH_DIR}/001-mt7621-1000mhz.patch" >/dev/null 2>&1; then
         patch -p1 < "${PATCH_DIR}/001-mt7621-1000mhz.patch"
@@ -34,15 +37,19 @@ else
     echo "    警告: 未找到 001-mt7621-1000mhz.patch，请检查路径！"
 fi
 
+# ==============================================================================
 # 2. 部署精简单板配置文件
-echo ">>> [3/6] 部署精简版板级配置文件 RM2100.config..."
+# ==============================================================================
+echo ">>> [3/7] 部署精简版板级配置文件 RM2100.config..."
 if [ -f "${CONFIG_DIR}/RM2100.config" ]; then
     cp -f "${CONFIG_DIR}/RM2100.config" "${WORK_DIR}/trunk/configs/templates/RM2100.config"
     echo "    已更新 trunk/configs/templates/RM2100.config"
 fi
 
-# 3. 准备并打包 ShellCrash + Mihomo 核心 + MetaCubeXD WebUI 面板
-echo ">>> [4/6] 构建并打包 ShellCrash 离线全套资产 (Mihomo 核心 + WebUI)..."
+# ==============================================================================
+# 3. 准备并打包 ShellCrash + Mihomo 核心 + Yacd WebUI 面板
+# ==============================================================================
+echo ">>> [4/7] 构建并打包 ShellCrash 离线全套资产 (Mihomo 核心 + WebUI)..."
 SC_PKG_DIR="${WORK_DIR}/trunk/user/shellcrash"
 mkdir -p "${SC_PKG_DIR}/dist"
 
@@ -57,22 +64,23 @@ if [ ! -f "${SC_PKG_DIR}/dist/ShellCrash.tar.gz" ]; then
     cp -f "${SC_TMP}/ShellCrash.tar.gz" "${SC_PKG_DIR}/dist/ShellCrash.tar.gz"
 fi
 
-# 3.2 下载针对 MIPSLE 深度优化的 Clash.Meta 轻量核心 (UPX 压缩后约 5.1MB，相比通用版瘦身 50%+)
+# 3.2 下载针对 MIPSLE 深度优化的 Clash.Meta 轻量核心 (UPX 压缩后约 5.1MB)
 if [ ! -f "${SC_PKG_DIR}/dist/CrashCore" ]; then
     echo "    下载针对 MIPSLE 优化的 Clash.Meta 软浮点轻量核心..."
     META_URL="https://github.com/MetaCubeX/Clash.Meta/releases/download/v1.16.0/Clash.Meta-linux-mipsle-softfloat-v1.16.0.gz"
     curl -fL --retry 3 -o "${SC_TMP}/meta.gz" "${META_URL}"
     gzip -d "${SC_TMP}/meta.gz"
     
+    # 使用 UPX 极限压缩以确保固件体积严格低于 18MB
     if command -v upx >/dev/null 2>&1; then
-        echo "    正在使用 UPX 对核心进行极限压缩以确保固件体积严格低于 18MB..."
+        echo "    正在使用 UPX 对核心进行极限压缩..."
         upx -9 "${SC_TMP}/meta" || true
     fi
     cp -f "${SC_TMP}/meta" "${SC_PKG_DIR}/dist/CrashCore"
     chmod +x "${SC_PKG_DIR}/dist/CrashCore"
 fi
 
-# 3.3 下载轻量化 Yacd Web 控制面板 (压缩包仅 390KB，解压后仅约 1MB)
+# 3.3 下载轻量化 Yacd Web 控制面板 (压缩包仅 390KB)
 if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
     echo "    下载轻量精美版 Yacd Web 控制台面板..."
     YACD_URL="https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
@@ -87,6 +95,7 @@ cat > "${SC_PKG_DIR}/shellcrash-service.sh" <<'EOF'
 #!/bin/sh
 # ==============================================================================
 # ShellCrash (Mihomo/Clash) 自动化服务与透明代理管理脚本
+# 关键设计：利用 ss_server nvram 变量"借壳"存储订阅链接
 # ==============================================================================
 
 CRASH_DIR="/tmp/ShellCrash"
@@ -109,6 +118,7 @@ init_env() {
     fi
 }
 
+# 配置透明代理 iptables 转发规则
 start_firewall() {
     echo "配置透明代理 iptables 转发规则..."
     iptables -t nat -N CLASH 2>/dev/null || iptables -t nat -F CLASH
@@ -133,6 +143,7 @@ start_firewall() {
     iptables -t nat -I PREROUTING -p tcp -j CLASH
 }
 
+# 清理透明代理 iptables 规则
 stop_firewall() {
     echo "清理透明代理 iptables 规则..."
     iptables -t nat -D PREROUTING -p tcp -j CLASH 2>/dev/null || true
@@ -140,27 +151,41 @@ stop_firewall() {
     iptables -t nat -X CLASH 2>/dev/null || true
 }
 
+# 拉取订阅配置
+# 参数 $1: 订阅链接 URL (可选，缺省时从 nvram 的 ss_server 读取)
 update_subscription() {
     SUB_URL="$1"
-    [ -z "${SUB_URL}" ] && SUB_URL="$(nvram get sc_sub_url)"
+    # 核心：从 ss_server 借壳读取订阅链接
+    [ -z "${SUB_URL}" ] && SUB_URL="$(nvram get ss_server)"
     if [ -z "${SUB_URL}" ]; then
         echo "错误: 未提供机场订阅链接！"
         return 1
     fi
-    echo "正在从订阅链接拉取配置: ${SUB_URL} ..."
+
+    # 校验是否为 URL (http/https 开头) 而非传统 SS 服务器 IP
+    case "${SUB_URL}" in
+        http://*|https://*)
+            echo "正在从订阅链接拉取配置: ${SUB_URL} ..."
+            ;;
+        *)
+            echo "ss_server 内容非订阅链接，跳过拉取。"
+            return 1
+            ;;
+    esac
+
     mkdir -p "${CONF_DIR}"
-    
+
     # 优先拉取 Clash 订阅，支持订阅转换接口降级
     TMP_CONF="/tmp/sub_config.yaml"
     curl -kfsSL --retry 3 --connect-timeout 10 -o "${TMP_CONF}" "${SUB_URL}" || \
     curl -kfsSL --retry 3 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')"
-    
+
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
         # 确保包含外部控制与 WebUI 端口设置
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
-        
+
         cat >> "${TMP_CONF}" <<YAMLEOF
 
 # === WebUI 与透明代理参数自动注入 ===
@@ -187,9 +212,9 @@ case "$1" in
             exit 0
         fi
 
-        # 如果尚无配置文件，尝试用 nvram 里的订阅链接拉取
+        # 如果尚无配置文件，尝试用 nvram 里的 ss_server (订阅链接) 拉取
         if [ ! -f "${CONF_FILE}" ]; then
-            SUB_URL="$(nvram get sc_sub_url)"
+            SUB_URL="$(nvram get ss_server)"
             [ -n "${SUB_URL}" ] && update_subscription "${SUB_URL}"
         fi
 
@@ -273,15 +298,51 @@ if ! grep -q "shellcrash" "${WORK_DIR}/trunk/user/Makefile"; then
     sed -i '/dir_\$(SHADOWSOCKS_ENABLE).*+= shadowsocks/a dir_y += shellcrash' "${WORK_DIR}/trunk/user/Makefile"
 fi
 
-# 4. 升级 Shadowsocks.asp 为现代全功能 ShellCrash 科学上网控制台
-echo ">>> [5/6] 升级 WebUI 科学上网页面为 ShellCrash + MetaCubeXD 可视化控制台..."
+# ==============================================================================
+# 4. 修改中文/英文字典标签 — 将菜单 "shadowsocks" 改为 "科学上网"
+# ==============================================================================
+echo ">>> [5/7] 修改 Padavan WebUI 菜单字典标签..."
+CN_DICT="${WORK_DIR}/trunk/user/www/dict/CN.dict"
+EN_DICT="${WORK_DIR}/trunk/user/www/dict/EN.footer"
+
+if [ -f "${CN_DICT}" ]; then
+    # 菜单标题: shadowsocks → 科学上网
+    sed -i 's/^menu5_16=shadowsocks$/menu5_16=科学上网/' "${CN_DICT}"
+    # 启用标签: 启用shadowsocks → 启用 ShellCrash
+    sed -i 's/^menu5_16_2=启用shadowsocks$/menu5_16_2=启用 ShellCrash/' "${CN_DICT}"
+    # 全局标签
+    sed -i 's/^menu5_16_1=全局$/menu5_16_1=基本设置/' "${CN_DICT}"
+    # 服务器配置 → 订阅配置
+    sed -i 's/^menu5_16_3=服务器配置$/menu5_16_3=订阅配置/' "${CN_DICT}"
+    # 服务器IP → 订阅链接
+    sed -i 's/^menu5_16_4=服务器IP地址:$/menu5_16_4=订阅链接:/' "${CN_DICT}"
+    echo "    已修改 CN.dict 菜单标签"
+fi
+
+if [ -f "${EN_DICT}" ]; then
+    sed -i 's/^menu5_16=shadowsocks$/menu5_16=ShellCrash/' "${EN_DICT}"
+    sed -i 's/^menu5_16_2=Enable shadowsocks$/menu5_16_2=Enable ShellCrash/' "${EN_DICT}"
+    sed -i 's/^menu5_16_3=Server Config$/menu5_16_3=Subscription/' "${EN_DICT}"
+    sed -i 's/^menu5_16_4=Server IP address:$/menu5_16_4=Subscription URL:/' "${EN_DICT}"
+    echo "    已修改 EN.footer 菜单标签"
+fi
+
+# ==============================================================================
+# 5. 用 Padavan 原生布局重写 Shadowsocks.asp
+#    核心修复：
+#    - 严格遵循 Padavan 的 box well → box_head → table 结构体系
+#    - 使用已在 variables.c 注册的 ss_server 变量"借壳"存储订阅 URL
+#    - 表单提交通过 action_script = "restart_ss" 触发后端 restart_ss()
+#    - 移除所有自定义 CSS class，只用 Padavan 自带样式
+# ==============================================================================
+echo ">>> [6/7] 用 Padavan 原生布局重写 Shadowsocks.asp 科学上网控制台..."
 WEB_ASP="${WORK_DIR}/trunk/user/www/n56u_ribbon_fixed/Shadowsocks.asp"
 
-cat > "${WEB_ASP}" <<'EOF'
+cat > "${WEB_ASP}" <<'ASPEOF'
 <!DOCTYPE html>
 <html>
 <head>
-<title><#Web_Title#> - ShellCrash 科学上网控制台</title>
+<title><#Web_Title#> - <#menu5_16#></title>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="-1">
@@ -301,92 +362,53 @@ cat > "${WEB_ASP}" <<'EOF'
 <script type="text/javascript" src="/popup.js"></script>
 <script type="text/javascript" src="/help.js"></script>
 
-<style>
-.sc-card {
-    background: #ffffff;
-    border-radius: 8px;
-    padding: 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-}
-.sc-badge-on {
-    background-color: #468847;
-    color: #fff;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-weight: bold;
-}
-.sc-badge-off {
-    background-color: #b94a48;
-    color: #fff;
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-weight: bold;
-}
-.sub-input {
-    width: 90% !important;
-    font-family: monospace;
-    font-size: 13px;
-}
-.iframe-container {
-    width: 100%;
-    height: 700px;
-    border: 1px solid #e3e3e3;
-    border-radius: 8px;
-    overflow: hidden;
-    background: #fafafa;
-}
-</style>
-
 <script>
+// 声明 shadowsocks_status 函数占位，防止 ASP 模板引擎调用时报错
+<% shadowsocks_status(); %>
+
 var $j = jQuery.noConflict();
 
+// 初始化 iToggle 开关绑定
 $j(document).ready(function(){
     init_itoggle('ss_enable');
 });
 
+// 页面初始化入口
 function initial(){
     show_banner(2);
+    // show_menu 参数: L1=5(高级设置), L2=13(shadowsocks菜单项索引), L3=1(第一个子标签)
     show_menu(5,13,1);
     show_footer();
-    check_status();
+    checkCrashStatus();
 }
 
-function check_status(){
-    $j.get('/apply.cgi?current_page=Shadowsocks.asp', function(){
-        // 自动检测端口响应状态
-        var img = new Image();
-        img.onload = function(){
-            $j('#sc_status_badge').html('<span class="sc-badge-on">● 运行中 (Mihomo Meta)</span>');
-            $j('#ui_iframe').attr('src', 'http://' + window.location.hostname + ':9999/ui');
-        };
-        img.onerror = function(){
-            $j('#sc_status_badge').html('<span class="sc-badge-off">● 已停止</span>');
-        };
-        img.src = 'http://' + window.location.hostname + ':9999/ui/favicon.ico?' + Math.random();
-    });
+// 检测 ShellCrash/Mihomo 是否在运行
+function checkCrashStatus(){
+    var statusEl = $j('#crash_status');
+    // 通过尝试加载 WebUI 资源检测服务状态
+    var img = new Image();
+    img.onload = function(){
+        statusEl.html('<span style="color:#468847;font-weight:bold;">● 运行中 (Mihomo Meta)</span>');
+    };
+    img.onerror = function(){
+        statusEl.html('<span style="color:#b94a48;font-weight:bold;">● 已停止</span>');
+    };
+    img.src = 'http://' + window.location.hostname + ':9999/ui/favicon.ico?' + Math.random();
 }
 
+// 打开 WebUI 控制面板
+function openWebUI(){
+    window.open('http://' + window.location.hostname + ':9999/ui', '_blank');
+}
+
+// 保存表单并触发后端服务重启
 function applyRule(){
     showLoading();
-    document.form.action_mode.value = " Apply ";
+    document.form.action_mode.value = " Applying ";
     document.form.current_page.value = "Shadowsocks.asp";
-    document.form.next_page.value = "Shadowsocks.asp";
+    document.form.next_page.value = "";
+    document.form.action_script.value = "restart_ss";
     document.form.submit();
-}
-
-function updateSubNow(){
-    var url = $j('#sc_sub_url').val().trim();
-    if(!url){
-        alert("请先填入机场订阅链接！");
-        return;
-    }
-    showLoading();
-    applyRule();
-}
-
-function openFullUI(){
-    window.open('http://' + window.location.hostname + ':9999/ui', '_blank');
 }
 </script>
 </head>
@@ -396,69 +418,109 @@ function openFullUI(){
 <div id="Loading" class="popup_bg"></div>
 <iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
 
-<form method="post" name="form" action="/apply.cgi" target="hidden_frame">
-<input type="hidden" name="action_mode" value=" Apply ">
+<form method="post" name="form" action="/start_apply.htm" target="hidden_frame">
 <input type="hidden" name="current_page" value="Shadowsocks.asp">
-<input type="hidden" name="next_page" value="Shadowsocks.asp">
+<input type="hidden" name="next_page" value="">
+<input type="hidden" name="next_host" value="">
+<input type="hidden" name="sid_list" value="ShadowsocksConf;">
+<input type="hidden" name="group_id" value="">
+<input type="hidden" name="action_mode" value=" Applying ">
+<input type="hidden" name="action_script" value="restart_ss">
 
-<div class="container-fluid">
+<div class="container-fluid" style="padding-top: 0px;">
     <div class="row-fluid">
-        <div class="span3">
-            <div id="Menu"></div>
-        </div>
+        <div class="span3"><div id="Menu"></div></div>
 
         <div class="span9">
-            <div class="box well">
-                <h2>ShellCrash 科学上网控制台</h2>
-                <div class="alert alert-info">
-                    <strong>红米 AC2100 高性能专版：</strong> 已内置 Mihomo (Clash Meta) 1000MHz 软浮点核心与 MetaCubeXD 图形化控制面板。支持通用的 Clash / V2Ray / SSR / SS 订阅链接，国内流量直连、国外流量自动分流。
-                </div>
+            <div class="box well grad_colour_dark_blue">
+                <h2 class="box_head round_top"><#menu5_16#></h2>
+                <div class="round_bottom">
+                    <div class="row-fluid">
+                        <div id="tabMenu" class="submenuBlock"></div>
 
-                <!-- 核心控制卡片 -->
-                <div class="sc-card">
-                    <table class="table" style="margin-bottom: 0;">
-                        <tr>
-                            <th width="30%">服务运行状态</th>
-                            <td>
-                                <span id="sc_status_badge"><span class="sc-badge-off">● 检查中...</span></span>
-                                &nbsp;&nbsp;
-                                <button type="button" class="btn btn-success btn-small" onclick="openFullUI();">在新窗口打开 Web 控制面板 ↗</button>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th>启用 ShellCrash</th>
-                            <td>
-                                <div class="main_itoggle">
-                                    <div id="ss_enable_on_of">
-                                        <input type="checkbox" id="ss_enable_fake" <% nvram_match_x("", "ss_enable", "1", "value=1 checked"); %><% nvram_match_x("", "ss_enable", "0", "value=0"); %>>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th>机场订阅链接 (Subscription)</th>
-                            <td>
-                                <input type="text" id="sc_sub_url" name="sc_sub_url" class="input sub-input" placeholder="粘贴您的 Clash / V2Ray / 通用订阅链接 (http:// 或 https://)" value="<% nvram_get_x("","sc_sub_url"); %>" />
-                                <div style="margin-top: 8px;">
-                                    <button type="button" class="btn btn-primary" onclick="updateSubNow();">保存并立即拉取订阅节点</button>
-                                    <span class="help-inline" style="color: #666;">粘贴订阅后点击此按钮，路由器将自动下载节点配置并启动分流服务。</span>
-                                </div>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
+                        <div style="margin: 4px 8px 0px 8px;">
+                            <div class="alert alert-info" style="margin-top: 10px;">
+                                <strong>红米 AC2100 高性能专版：</strong>
+                                已内置 Mihomo (Clash Meta) 1000MHz 软浮点核心与 Yacd 图形化控制面板。
+                                支持通用的 Clash / V2Ray / SS / SSR / Trojan 订阅链接，国内直连、国外自动分流。
+                            </div>
 
-                <!-- 内嵌 MetaCubeXD 仪表盘 -->
-                <div class="sc-card">
-                    <h4>可视化节点选择与测速仪表盘</h4>
-                    <p style="color: #777;">服务启动后下方自动呈现节点列表与测速界面。您也可以直接点选节点、切换分流策略：</p>
-                    <div class="iframe-container">
-                        <iframe id="ui_iframe" src="" width="100%" height="100%" frameborder="0"></iframe>
+                            <table width="100%" cellpadding="4" cellspacing="0" class="table">
+                                <!-- 基本设置区 -->
+                                <tr>
+                                    <th colspan="2" style="background-color: #E3E3E3;"><#menu5_16_1#></th>
+                                </tr>
+                                <tr>
+                                    <th width="50%"><#menu5_16_2#></th>
+                                    <td>
+                                        <div class="main_itoggle">
+                                            <div id="ss_enable_on_of">
+                                                <input type="checkbox" id="ss_enable_fake"
+                                                    <% nvram_match_x("", "ss_enable", "1", "value=1 checked"); %>
+                                                    <% nvram_match_x("", "ss_enable", "0", "value=0"); %>>
+                                            </div>
+                                        </div>
+                                        <div style="position: absolute; margin-left: -10000px;">
+                                            <input type="radio" name="ss_enable" id="ss_enable_1" value="1"
+                                                <% nvram_match_x("", "ss_enable", "1", "checked"); %>>
+                                            <input type="radio" name="ss_enable" id="ss_enable_0" value="0"
+                                                <% nvram_match_x("", "ss_enable", "0", "checked"); %>>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th width="50%">服务运行状态</th>
+                                    <td>
+                                        <span id="crash_status"><span style="color:#999;">● 检测中...</span></span>
+                                        &nbsp;&nbsp;
+                                        <input type="button" class="btn btn-success btn-mini" value="打开 Web 控制面板 ↗" onclick="openWebUI();">
+                                    </td>
+                                </tr>
+
+                                <!-- 订阅配置区 -->
+                                <tr>
+                                    <th colspan="2" style="background-color: #E3E3E3;"><#menu5_16_3#></th>
+                                </tr>
+                                <tr>
+                                    <th width="50%"><#menu5_16_4#></th>
+                                    <td>
+                                        <input type="text" maxlength="512" class="input" size="60"
+                                            name="ss_server" style="width: 450px; font-family: monospace;"
+                                            placeholder="粘贴您的 Clash / V2Ray / 通用订阅链接"
+                                            value="<% nvram_get_x("","ss_server"); %>" />
+                                        <div style="margin-top: 6px; color: #888; font-size: 12px;">
+                                            粘贴订阅链接后点击下方"应用"按钮，路由器将自动拉取节点配置并启动分流服务。
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                <!-- WebUI 信息区 -->
+                                <tr>
+                                    <th colspan="2" style="background-color: #E3E3E3;">Yacd Web 控制面板</th>
+                                </tr>
+                                <tr>
+                                    <th width="50%">面板访问地址</th>
+                                    <td>
+                                        <span style="font-family: monospace;">http://192.168.123.1:9999/ui</span>
+                                        &nbsp;&nbsp;
+                                        <input type="button" class="btn btn-info btn-mini" value="在新窗口打开 ↗" onclick="openWebUI();">
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th width="50%">功能说明</th>
+                                    <td style="color: #666;">
+                                        启动服务后可通过上方地址访问 Yacd 图形化面板，进行节点选择、延迟测速、分流策略切换等操作。
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <div style="text-align: center; margin: 15px 0 10px;">
+                                <input class="btn btn-primary" style="width: 219px;" type="button"
+                                    value="<#CTL_apply#>" onclick="applyRule();" />
+                            </div>
+
+                        </div>
                     </div>
-                </div>
-
-                <div style="text-align: center; margin-top: 15px;">
-                    <input class="btn btn-primary btn-large" style="width: 250px;" type="button" value="<#CTL_apply#>" onclick="applyRule()" />
                 </div>
             </div>
         </div>
@@ -469,15 +531,22 @@ function openFullUI(){
 <div id="Footer"></div>
 </body>
 </html>
-EOF
+ASPEOF
 
-# 5. 对接 shadowsocks.sh 生命周期
-echo ">>> [6/6] 对接 Padavan 系统后台生命周期与防火墙规则..."
+# ==============================================================================
+# 6. 对接 shadowsocks.sh 生命周期
+# ==============================================================================
+echo ">>> [7/7] 对接 Padavan 系统后台生命周期与防火墙规则..."
 SS_SH="${WORK_DIR}/trunk/user/shadowsocks/scripts/shadowsocks.sh"
 
 cat > "${SS_SH}" <<'EOF'
 #!/bin/sh
-# 对接 ShellCrash 核心生命周期
+# ==============================================================================
+# ShellCrash 生命周期对接脚本
+# 由 Padavan 系统后台 services.c 中 start_ss() / stop_ss() 调用
+# 当 WebUI 点击"应用"后，httpd 触发 EVM_RESTART_SHADOWSOCKS 事件
+# 进而调用 restart_ss() → 依次执行 stop_ss() + start_ss()
+# ==============================================================================
 case "$1" in
     start)
         if [ "$(nvram get ss_enable)" = "1" ]; then
@@ -503,7 +572,7 @@ chmod +x "${SS_SH}"
 
 # 修复 dropbear 构建依赖路径双保险
 if [ -f "${WORK_DIR}/trunk/user/dropbear/Makefile" ]; then
-    sed -i 's|\./configure \\|CFLAGS="\$(CFLAGS) -I\$(STAGEDIR)/include" LDFLAGS="\$(LDFLAGS) -L\$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
+    sed -i 's|\./configure \\|CFLAGS="$(CFLAGS) -I$(STAGEDIR)/include" LDFLAGS="$(LDFLAGS) -L$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
 fi
 
 echo ">>> 全部定制逻辑配置完毕！ShellCrash 核心、WebUI 面板与订阅管理已全部就绪！"
