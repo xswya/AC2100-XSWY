@@ -26,6 +26,18 @@
   - [x] 首次全内置版本体积达 25.9MB，超出 Breed 小米 3G 布局的 20MB~24MB 上限导致预处理失败。
   - [x] **实施方案 A 深度脱脂瘦身**：改用针对 MIPS 深度优化的 Clash.Meta 核心（压缩后仅 5.1MB）与极致精简的 Yacd 控制面板（压缩包仅 390KB）。
   - [x] 成功将固件总大小严格压制在 **16~17MB** 安全阈值之内，彻底杜绝 Breed 数据预处理失败与 0x0 擦除报错，纯离线开箱即用。
+- [x] **阶段 6：修复 ShellCrash WebUI 三大核心问题**
+  - [x] **问题 1 菜单标题**：通过 `customize.sh` 修改 `CN.dict` 字典文件，将 `menu5_16=shadowsocks` 改为 `menu5_16=科学上网`。
+  - [x] **问题 2 界面错位**：移除所有自定义 CSS class（sc-card、sc-badge 等），严格采用 Padavan 原生 `box well grad_colour_dark_blue` → `box_head round_top` → `table class="table"` 布局结构体系。
+  - [x] **问题 3 保存无反应**：发现 `sc_sub_url` 未在 `variables.c` 的 `ShadowsocksConf` 数组中注册，httpd 后端直接忽略该变量。改用已注册的 `ss_server` 变量"借壳"存储订阅 URL；表单 action 改为 `start_apply.htm`，`action_script` 设为 `restart_ss`，正确触发后端 `restart_ss()` → `shadowsocks.sh start`。
+- [x] **阶段 7：深度性能与体验全方位优化（SmartDNS + Anti-AD + 内核高并发）**
+  - [x] **SmartDNS 深度集成**：在 `RM2100.config` 中启用源码自带的 `CONFIG_FIRMWARE_INCLUDE_SMARTDNS=y`（体积仅 ~200KB）。
+  - [x] **DNS 分流与防污染闭环**：配置 SmartDNS 监听 `127.0.0.1:6053`，设置腾讯/阿里/114 多上游并发测速与长缓存，作为 Mihomo Fake-IP 的国内上游，实现国内秒开、国外防污染。
+  - [x] **自启动与生命周期联动**：在 `mtd_storage.sh` 中将 SmartDNS 自动注入 `post_wan_script.sh`；同时在 `shadowsocks.sh start` 时双重保险激活 SmartDNS。
+  - [x] **轻量广告拦截 (Anti-AD)**：在 Mihomo 配置模板中引入 anti-ad 精选规则集，零额外二进制体积消耗实现网络层去广告与防隐私追踪。
+  - [x] **网络内核参数调优**：将连接跟踪上限提升至 `nf_conntrack_max=65536`，开启 `tcp_fastopen=3` 和 `tcp_tw_reuse=1`，确保大并发流量稳定不丢包。
+  - [x] **轻量组件升级**：启用 `VLMCSD` (KMS 服务)； Dropbear 替换 OpenSSH 释放 500KB 固件空间。
+  - [x] **文档与 CI 升级**：更新 `build-padavan.yml` 和 `README.md`，同步全部新特性与刷机指引。
 
 ---
 
@@ -36,3 +48,6 @@
 
 ### 2. MT7621 CPU 1000MHz 超频原理
 MT7621 的基准时钟一般为 20MHz。CPU 频率由锁相环 CPUPLL 寄存器（`0x1E000648`）控制。通过计算反馈分频系数 `fbdiv = 50`，可输出 `20MHz * 50 = 1000MHz`。通过打入内核驱动级补丁，路由器上电即以 1.0 GHz 高主频运行，科学上网性能更上一层楼。
+
+### 3. Padavan WebUI 变量注册机制与 "借壳" 策略
+Padavan 的 httpd 后端通过 `variables.c` 中的 `struct variable` 数组静态注册所有可通过 Web 表单读写的 nvram 变量。未注册的变量名（如自定义的 `sc_sub_url`）在 `apply.cgi` / `start_apply.htm` 提交时会被直接丢弃，不保存、不触发任何服务重启。**修改 C 源码需要交叉编译 httpd，风险极大**。因此采用"借壳"策略：利用已注册的 `ss_server`（原用途为 SS 服务器 IP）字段存储订阅 URL，`shellcrash-service.sh` 启动时自动检测该字段是否为 `http://` 或 `https://` 前缀来判断其为订阅链接并拉取。

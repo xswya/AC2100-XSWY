@@ -97,14 +97,18 @@ jobs:
           name: "红米 AC2100 Padavan 1000MHz 极简稳定版 (${{ steps.organize.outputs.BUILD_TIME }})"
           body: |
             ### 固件定制特性说明
-            - **CPU 超频**: 锁定 1000MHz (1.0 GHz)，大幅提升带机与加解密性能
-            - **极致精简**: 剔除 USB、Samba、Aria2、Transmission、校园网认证等无用后台
-            - **稳定高效**: 启用 SFE 快捷转发加速、IPv6/NAPT66、Dropbear 轻量 SSH
-            - **科学上网**: 内置 Shadowsocks / ShadowsocksR 原生支持与轻量优化版 Xray 核心 (`/usr/bin/xray`)
+            - **CPU 超频**: 锁定 1000MHz (1.0 GHz)，大幅提升路由器带机与加解密性能
+            - **科学上网**: 全内置 ShellCrash + Mihomo (Clash Meta) 核心 + Yacd Web 控制面板，支持 SS/SSR/VMess/VLESS/Trojan/Hysteria2 全协议
+            - **DNS 优化**: 内置 SmartDNS 多上游并发测速 + 缓存加速，配合 Fake-IP 实现全网防污染、网页秒开
+            - **广告拦截**: 集成 Anti-AD 规则集，轻量高效拦截全网恶意广告与隐私追踪
+            - **内核调优**: 优化网络并发连接跟踪 (`nf_conntrack_max=65536`)、启用 TCP Fast Open 与连接复用
+            - **极致精简**: 剔除 USB、Samba、Aria2、Transmission、校园网认证等无用后台，体积严控在 16~17MB 安全区间
+            - **实用功能**: 启用 SFE 快捷转发加速、IPv6/NAPT66、Dropbear 轻量 SSH、VLMCSD (KMS 激活)、TTYD 网页终端
             
             ### 刷机建议
-            - 建议在 **Breed Web 恢复控制台** 下刷入 `.trx` 固件。
+            - 建议在 **Breed Web 恢复控制台** (选择“小米路由3G/AC2100”公版或通用闪存布局) 下直接刷入 `.trx` 固件。
             - 默认管理地址: `192.168.123.1`，用户名: `admin`，密码: `admin`，无线密码: `1234567890`。
+            - 科学上网面板: `http://192.168.123.1:9999/ui`。
           files: release_firmware/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

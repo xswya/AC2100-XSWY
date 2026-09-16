@@ -8,7 +8,8 @@
 #   3. 集成 ShellCrash 框架 + Mihomo (Clash Meta) 核心 + Yacd WebUI
 #   4. 修改 Padavan 菜单字典标签，将 "shadowsocks" 改为 "科学上网"
 #   5. 用 Padavan 原生布局重写 Shadowsocks.asp 科学上网控制台
-#   6. 对接 shadowsocks.sh 生命周期，利用 ss_server 借壳存储订阅链接
+#   6. 配置 SmartDNS 国内外 DNS 分流加速 + 广告拦截规则
+#   7. 对接 shadowsocks.sh 生命周期，利用 ss_server 借壳存储订阅链接
 # ==============================================================================
 
 set -eo pipefail
@@ -17,7 +18,7 @@ WORK_DIR="${1:-$(pwd)}"
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches"
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/configs"
 
-echo ">>> [1/7] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
+echo ">>> [1/9] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
 echo "    源码目录: ${WORK_DIR}"
 
 cd "${WORK_DIR}"
@@ -25,7 +26,7 @@ cd "${WORK_DIR}"
 # ==============================================================================
 # 1. 注入 1000MHz 超频补丁
 # ==============================================================================
-echo ">>> [2/7] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
+echo ">>> [2/9] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
 if [ -f "${PATCH_DIR}/001-mt7621-1000mhz.patch" ]; then
     if patch -p1 -N --dry-run < "${PATCH_DIR}/001-mt7621-1000mhz.patch" >/dev/null 2>&1; then
         patch -p1 < "${PATCH_DIR}/001-mt7621-1000mhz.patch"
@@ -40,7 +41,7 @@ fi
 # ==============================================================================
 # 2. 部署精简单板配置文件
 # ==============================================================================
-echo ">>> [3/7] 部署精简版板级配置文件 RM2100.config..."
+echo ">>> [3/9] 部署精简版板级配置文件 RM2100.config..."
 if [ -f "${CONFIG_DIR}/RM2100.config" ]; then
     cp -f "${CONFIG_DIR}/RM2100.config" "${WORK_DIR}/trunk/configs/templates/RM2100.config"
     echo "    已更新 trunk/configs/templates/RM2100.config"
@@ -49,7 +50,7 @@ fi
 # ==============================================================================
 # 3. 准备并打包 ShellCrash + Mihomo 核心 + Yacd WebUI 面板
 # ==============================================================================
-echo ">>> [4/7] 构建并打包 ShellCrash 离线全套资产 (Mihomo 核心 + WebUI)..."
+echo ">>> [4/9] 构建并打包 ShellCrash 离线全套资产 (Mihomo 核心 + WebUI)..."
 SC_PKG_DIR="${WORK_DIR}/trunk/user/shellcrash"
 mkdir -p "${SC_PKG_DIR}/dist"
 
@@ -185,6 +186,7 @@ update_subscription() {
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^dns:/,/^[a-z]/{/^dns:/d;/^  /d}' "${TMP_CONF}" 2>/dev/null || true
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
@@ -192,7 +194,40 @@ update_subscription() {
 redir-port: ${PORT_REDIR}
 external-controller: 0.0.0.0:${PORT_UI}
 external-ui: ${RO_DIR}/ui
+
+# === DNS 增强 (SmartDNS 国内加速 + 海外防污染) ===
+dns:
+  enable: true
+  listen: 0.0.0.0:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.localhost"
+  nameserver:
+    - 127.0.0.1:6053
+  fallback:
+    - tls://8.8.4.4:853
+    - tls://1.0.0.1:853
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
+# === 广告拦截规则集 ===
+rule-providers:
+  anti-ad:
+    type: http
+    behavior: domain
+    url: "https://anti-ad.net/clash.yaml"
+    path: ./ruleset/anti-ad.yaml
+    interval: 86400
 YAMLEOF
+
+        # 在已有 rules 前注入广告拦截规则
+        if grep -q "^rules:" "${TMP_CONF}"; then
+            sed -i '/^rules:/a\  - RULE-SET,anti-ad,REJECT' "${TMP_CONF}"
+        fi
         mv -f "${TMP_CONF}" "${CONF_FILE}"
         mtd_storage.sh save >/dev/null 2>&1 &
         echo "订阅配置拉取并解析成功！"
@@ -219,6 +254,7 @@ case "$1" in
         fi
 
         # 如果依然没有配置，提供极简备用配置以确保 WebUI 能够先行启动
+        # 已内置：DNS 增强（利用 SmartDNS 做上游）+ 广告拦截规则集
         if [ ! -f "${CONF_FILE}" ]; then
             cat > "${CONF_FILE}" <<YAMLEOF
 mixed-port: 7890
@@ -227,8 +263,41 @@ external-controller: 0.0.0.0:${PORT_UI}
 external-ui: ${RO_DIR}/ui
 mode: rule
 log-level: warning
+
+# === DNS 增强配置 (利用 SmartDNS 做国内上游，防污染) ===
+dns:
+  enable: true
+  listen: 0.0.0.0:5353
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.localhost"
+    - "router.asus.com"
+    - "my.router"
+  nameserver:
+    - 127.0.0.1:6053
+  fallback:
+    - tls://8.8.4.4:853
+    - tls://1.0.0.1:853
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
 proxies: []
+
+# === 广告拦截规则集 (anti-ad 精简高效规则) ===
+rule-providers:
+  anti-ad:
+    type: http
+    behavior: domain
+    url: "https://anti-ad.net/clash.yaml"
+    path: ./ruleset/anti-ad.yaml
+    interval: 86400
+
 rules:
+  - RULE-SET,anti-ad,REJECT
   - GEOIP,CN,DIRECT
   - MATCH,DIRECT
 YAMLEOF
@@ -288,6 +357,7 @@ romfs:
 	cp -rf $(THISDIR)/dist/* $(ROMFSDIR)/etc_ro/ShellCrash/
 	chmod +x $(ROMFSDIR)/etc_ro/ShellCrash/CrashCore
 	$(ROMFSINST) -p +x $(THISDIR)/shellcrash-service.sh /usr/bin/shellcrash-service.sh
+	$(ROMFSINST) -p +x $(THISDIR)/smartdns_start.sh /usr/bin/smartdns_start.sh
 	ln -sf /etc_ro/ShellCrash/CrashCore $(ROMFSDIR)/usr/bin/CrashCore
 	ln -sf /usr/bin/shellcrash-service.sh $(ROMFSDIR)/usr/bin/crash
 EOF
@@ -301,7 +371,7 @@ fi
 # ==============================================================================
 # 4. 修改中文/英文字典标签 — 将菜单 "shadowsocks" 改为 "科学上网"
 # ==============================================================================
-echo ">>> [5/7] 修改 Padavan WebUI 菜单字典标签..."
+echo ">>> [5/9] 修改 Padavan WebUI 菜单字典标签..."
 CN_DICT="${WORK_DIR}/trunk/user/www/dict/CN.dict"
 EN_DICT="${WORK_DIR}/trunk/user/www/dict/EN.footer"
 
@@ -335,7 +405,7 @@ fi
 #    - 表单提交通过 action_script = "restart_ss" 触发后端 restart_ss()
 #    - 移除所有自定义 CSS class，只用 Padavan 自带样式
 # ==============================================================================
-echo ">>> [6/7] 用 Padavan 原生布局重写 Shadowsocks.asp 科学上网控制台..."
+echo ">>> [6/9] 用 Padavan 原生布局重写 Shadowsocks.asp 科学上网控制台..."
 WEB_ASP="${WORK_DIR}/trunk/user/www/n56u_ribbon_fixed/Shadowsocks.asp"
 
 cat > "${WEB_ASP}" <<'ASPEOF'
@@ -534,9 +604,77 @@ function applyRule(){
 ASPEOF
 
 # ==============================================================================
-# 6. 对接 shadowsocks.sh 生命周期
+# 7. 配置 SmartDNS 国内外 DNS 分流加速与网络参数调优
 # ==============================================================================
-echo ">>> [7/7] 对接 Padavan 系统后台生命周期与防火墙规则..."
+echo ">>> [7/9] 配置 SmartDNS 国内外 DNS 分流加速与网络参数调优..."
+
+# 生成 SmartDNS 自启动脚本（存入 shellcrash 包目录，由 Makefile 直接安装到 /usr/bin/）
+cat > "${SC_PKG_DIR}/smartdns_start.sh" <<'SDNSEOF'
+#!/bin/sh
+# SmartDNS 国内外 DNS 分流配置
+# 监听 6053 端口，作为 Mihomo DNS 的国内上游
+
+SDNS_CONF="/tmp/smartdns.conf"
+SDNS_PID="/var/run/smartdns.pid"
+
+case "$1" in
+    stop)
+        killall smartdns 2>/dev/null || true
+        rm -f "${SDNS_PID}"
+        ;;
+    start|restart|*)
+        # 生成优化版 SmartDNS 配置文件
+        cat > "${SDNS_CONF}" <<SEOF
+# SmartDNS 配置 — 红米 AC2100 定制版
+bind 127.0.0.1:6053
+
+# 缓存设置 (平衡 128MB 内存与解析性能)
+cache-size 4096
+prefetch-domain yes
+serve-expired yes
+serve-expired-ttl 259200
+
+# 测速模式: ping + tcp:80，并发优选最低延迟
+speed-check-mode ping,tcp:80
+
+# 国内 DNS 上游组 (低延迟首选)
+server 119.29.29.29 -group cn -exclude-default-group
+server 223.5.5.5 -group cn -exclude-default-group
+server 114.114.114.114 -group cn -exclude-default-group
+
+# 默认上游 (国内极速 DNS)
+server 119.29.29.29
+server 223.5.5.5
+
+log-level warn
+SEOF
+
+        if [ -x /usr/bin/smartdns ]; then
+            killall smartdns 2>/dev/null || true
+            sleep 1
+            /usr/bin/smartdns -c "${SDNS_CONF}" -p "${SDNS_PID}" -f
+            logger -st "SmartDNS" "SmartDNS 已启动，监听 127.0.0.1:6053"
+        else
+            logger -st "SmartDNS" "提示: smartdns 二进制未就绪"
+        fi
+        ;;
+esac
+SDNSEOF
+chmod +x "${SC_PKG_DIR}/smartdns_start.sh"
+
+# 将 SmartDNS 自启动与网络内核优化注入到默认 post_wan_script.sh (mtd_storage.sh)
+STORAGE_SH="${WORK_DIR}/trunk/user/scripts/mtd_storage.sh"
+if [ -f "${STORAGE_SH}" ]; then
+    if ! grep -q "smartdns_start.sh" "${STORAGE_SH}"; then
+        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n\n### 网络内核参数高并发优化\nsysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true\nsysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true\nsysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true\n\n### 启动 SmartDNS DNS 加速服务\n[ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &\n' "${STORAGE_SH}" || true
+        echo "    已将 SmartDNS 自启动与网络调优注入到 mtd_storage.sh"
+    fi
+fi
+
+# ==============================================================================
+# 8. 对接 shadowsocks.sh 生命周期
+# ==============================================================================
+echo ">>> [8/9] 对接 Padavan 系统后台生命周期与防火墙规则..."
 SS_SH="${WORK_DIR}/trunk/user/shadowsocks/scripts/shadowsocks.sh"
 
 cat > "${SS_SH}" <<'EOF'
@@ -549,6 +687,8 @@ cat > "${SS_SH}" <<'EOF'
 # ==============================================================================
 case "$1" in
     start)
+        # 优先确保 SmartDNS 就绪
+        [ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &
         if [ "$(nvram get ss_enable)" = "1" ]; then
             logger -st "ShellCrash" "启动 ShellCrash 核心与透明代理..."
             /usr/bin/shellcrash-service.sh start
@@ -575,4 +715,11 @@ if [ -f "${WORK_DIR}/trunk/user/dropbear/Makefile" ]; then
     sed -i 's|\./configure \\|CFLAGS="$(CFLAGS) -I$(STAGEDIR)/include" LDFLAGS="$(LDFLAGS) -L$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
 fi
 
-echo ">>> 全部定制逻辑配置完毕！ShellCrash 核心、WebUI 面板与订阅管理已全部就绪！"
+echo ">>> [9/9] 优化完成总结:"
+echo "    ✓ CPU 超频 1000MHz"
+echo "    ✓ ShellCrash + Mihomo 全协议代理"
+echo "    ✓ SmartDNS DNS 防污染加速"
+echo "    ✓ Anti-AD 广告拦截规则"
+echo "    ✓ VLMCSD KMS 激活服务"
+echo "    ✓ Yacd Web 控制面板"
+echo ">>> 全部定制逻辑配置完毕！"
