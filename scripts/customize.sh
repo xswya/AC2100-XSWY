@@ -224,10 +224,14 @@ update_subscription() {
     fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
-        sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^secret:/d' "${TMP_CONF}" 2>/dev/null || true
+        # 彻底清理原配置中可能存在的重复顶层 key，防止 Mihomo 解析 YAML 报 duplicate mapping key 致命退出
+        sed -i '/^[[:space:]]*external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*secret:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*allow-lan:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*mode:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^[[:space:]]*log-level:/d' "${TMP_CONF}" 2>/dev/null || true
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
