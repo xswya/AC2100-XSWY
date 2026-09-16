@@ -698,8 +698,8 @@ chmod +x "${SC_PKG_DIR}/smartdns_start.sh"
 STORAGE_SH="${WORK_DIR}/trunk/user/scripts/mtd_storage.sh"
 if [ -f "${STORAGE_SH}" ]; then
     if ! grep -q "smartdns_start.sh" "${STORAGE_SH}"; then
-        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n\n### 网络内核参数高并发优化\nsysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true\nsysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true\nsysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true\n\n### 启动 SmartDNS DNS 加速服务\n[ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &\n' "${STORAGE_SH}" || true
-        echo "    已将 SmartDNS 自启动与网络调优注入到 mtd_storage.sh"
+        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n\n### 网络内核参数高并发优化\nsysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true\nsysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true\nsysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true\n\n### 启动 SmartDNS DNS 加速服务\n[ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &\n\n### 自动初始化 OpenSSH 环境与主机密钥 (保证新固件开箱即用)\nif [ ! -f /etc/storage/openssh/sshd_config ]; then\n\tmkdir -p /etc/storage/openssh\n\tcat > /etc/storage/openssh/sshd_config <<'\''SEOF'\''\nPort 22\nListenAddress 0.0.0.0\nListenAddress ::\nProtocol 2\nHostKey /etc/storage/openssh/ssh_host_rsa_key\nHostKey /etc/storage/openssh/ssh_host_ecdsa_key\nHostKey /etc/storage/openssh/ssh_host_ed25519_key\nPermitRootLogin yes\nPasswordAuthentication yes\nSubsystem sftp /usr/libexec/sftp-server\nSEOF\n\tssh-keygen -t rsa -b 2048 -f /etc/storage/openssh/ssh_host_rsa_key -N '\'''\'' 2>/dev/null || true\n\tssh-keygen -t ed25519 -f /etc/storage/openssh/ssh_host_ed25519_key -N '\'''\'' 2>/dev/null || true\n\tchmod 600 /etc/storage/openssh/ssh_host_* 2>/dev/null || true\n\tmtd_storage.sh save\n\tkillall sshd 2>/dev/null || true\n\t/usr/sbin/sshd 2>/dev/null || true\nfi\n' "${STORAGE_SH}" || true
+        echo "    已将 SmartDNS 自启动、网络调优与 OpenSSH 自愈注入到 mtd_storage.sh"
     fi
 fi
 
