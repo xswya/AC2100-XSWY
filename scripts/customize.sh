@@ -65,29 +65,28 @@ if [ ! -f "${SC_PKG_DIR}/dist/ShellCrash.tar.gz" ]; then
     cp -f "${SC_TMP}/ShellCrash.tar.gz" "${SC_PKG_DIR}/dist/ShellCrash.tar.gz"
 fi
 
-# 3.2 下载针对 MIPSLE 深度优化的 Clash.Meta 轻量核心 (UPX 压缩后约 5.1MB)
+# 3.2 下载针对 MIPSLE 架构的 Clash.Meta (Mihomo) 软浮点核心 (保留 ELF 原生格式，严禁 UPX 压缩破坏 Go 内存段)
 if [ ! -f "${SC_PKG_DIR}/dist/CrashCore" ]; then
-    echo "    下载针对 MIPSLE 优化的 Clash.Meta 软浮点轻量核心..."
+    echo "    下载针对 MIPSLE 优化的 Clash.Meta 软浮点核心..."
     META_URL="https://github.com/MetaCubeX/Clash.Meta/releases/download/v1.16.0/Clash.Meta-linux-mipsle-softfloat-v1.16.0.gz"
     curl -fL --retry 3 -o "${SC_TMP}/meta.gz" "${META_URL}"
     gzip -d "${SC_TMP}/meta.gz"
-    
-    # 使用 UPX 极限压缩以确保固件体积严格低于 18MB
-    if command -v upx >/dev/null 2>&1; then
-        echo "    正在使用 UPX 对核心进行极限压缩..."
-        upx -9 "${SC_TMP}/meta" || true
-    fi
     cp -f "${SC_TMP}/meta" "${SC_PKG_DIR}/dist/CrashCore"
     chmod +x "${SC_PKG_DIR}/dist/CrashCore"
 fi
 
-# 3.3 下载轻量化 Yacd Web 控制面板 (压缩包仅 390KB)
+# 3.3 下载轻量精美版 Yacd Web 控制面板 (展平目录确保 index.html 在根目录)
 if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
     echo "    下载轻量精美版 Yacd Web 控制台面板..."
     YACD_URL="https://github.com/haishanh/yacd/releases/latest/download/yacd.tar.xz"
     curl -fL --retry 3 -o "${SC_TMP}/yacd.tar.xz" "${YACD_URL}"
     mkdir -p "${SC_PKG_DIR}/dist/ui"
     tar -xJf "${SC_TMP}/yacd.tar.xz" -C "${SC_PKG_DIR}/dist/ui"
+    # 如果解压包含 public 子目录，提取到顶层
+    if [ -d "${SC_PKG_DIR}/dist/ui/public" ]; then
+        cp -rf "${SC_PKG_DIR}/dist/ui/public/"* "${SC_PKG_DIR}/dist/ui/"
+        rm -rf "${SC_PKG_DIR}/dist/ui/public"
+    fi
 fi
 rm -rf "${SC_TMP}"
 
@@ -97,24 +96,22 @@ cat > "${SC_PKG_DIR}/shellcrash-service.sh" <<'EOF'
 # ==============================================================================
 # ShellCrash (Mihomo/Clash) 自动化服务与透明代理管理脚本
 # 关键设计：利用 ss_server nvram 变量"借壳"存储订阅链接
+# 运行环境全部置于 /tmp/ShellCrash (tmpfs 内存)，防止写满 Flash
 # ==============================================================================
 
 CRASH_DIR="/tmp/ShellCrash"
 RO_DIR="/etc_ro/ShellCrash"
-CONF_DIR="/etc/storage/ShellCrash"
-CONF_FILE="${CONF_DIR}/config.yaml"
+CONF_DIR="${CRASH_DIR}"
+CONF_FILE="${CRASH_DIR}/config.yaml"
 PID_FILE="/var/run/CrashCore.pid"
+LOG_FILE="${CRASH_DIR}/crash.log"
 PORT_REDIR=7892
 PORT_UI=9999
 
 # 初始化运行目录 (RAM 快速环境)
 init_env() {
-    if [ ! -d "${CRASH_DIR}" ]; then
-        mkdir -p "${CRASH_DIR}" "${CONF_DIR}"
-        if [ -f "${RO_DIR}/ShellCrash.tar.gz" ]; then
-            tar -zxf "${RO_DIR}/ShellCrash.tar.gz" -C "${CRASH_DIR}"/ 2>/dev/null || true
-        fi
-        ln -sf "${RO_DIR}/CrashCore" "${CRASH_DIR}/CrashCore"
+    mkdir -p "${CRASH_DIR}"
+    if [ ! -d "${CRASH_DIR}/ui" ]; then
         ln -sf "${RO_DIR}/ui" "${CRASH_DIR}/ui"
     fi
 }
@@ -141,6 +138,7 @@ start_firewall() {
 
     # TCP 重定向到 Clash 端口
     iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports ${PORT_REDIR}
+    iptables -t nat -D PREROUTING -p tcp -j CLASH 2>/dev/null || true
     iptables -t nat -I PREROUTING -p tcp -j CLASH
 }
 
@@ -156,84 +154,54 @@ stop_firewall() {
 # 参数 $1: 订阅链接 URL (可选，缺省时从 nvram 的 ss_server 读取)
 update_subscription() {
     SUB_URL="$1"
-    # 核心：从 ss_server 借壳读取订阅链接
     [ -z "${SUB_URL}" ] && SUB_URL="$(nvram get ss_server)"
     if [ -z "${SUB_URL}" ]; then
-        echo "错误: 未提供机场订阅链接！"
+        echo "提示: 未配置订阅链接，使用本地默认配置。"
         return 1
     fi
 
-    # 校验是否为 URL (http/https 开头) 而非传统 SS 服务器 IP
+    # 校验是否为 URL (http/https 开头)
     case "${SUB_URL}" in
         http://*|https://*)
             echo "正在从订阅链接拉取配置: ${SUB_URL} ..."
             ;;
         *)
-            echo "ss_server 内容非订阅链接，跳过拉取。"
+            echo "ss_server 非 URL 链接 (当前为: ${SUB_URL})，跳过拉取。"
             return 1
             ;;
     esac
 
     mkdir -p "${CONF_DIR}"
-
-    # 优先拉取 Clash 订阅，支持订阅转换接口降级
     TMP_CONF="/tmp/sub_config.yaml"
-    curl -kfsSL --retry 3 --connect-timeout 10 -o "${TMP_CONF}" "${SUB_URL}" || \
-    curl -kfsSL --retry 3 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')"
+    rm -f "${TMP_CONF}"
+
+    # 优先直接拉取，如果失败尝试走公共订阅转换
+    curl -kfsSL --retry 2 --connect-timeout 8 -o "${TMP_CONF}" "${SUB_URL}" || \
+    curl -kfsSL --retry 2 --connect-timeout 10 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')" || true
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
-        # 确保包含外部控制与 WebUI 端口设置
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
-        sed -i '/^dns:/,/^[a-z]/{/^dns:/d;/^  /d}' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^secret:/d' "${TMP_CONF}" 2>/dev/null || true
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
-# === WebUI 与透明代理参数自动注入 ===
+# === 自动注入本地 Web 控制台与分流参数 ===
 redir-port: ${PORT_REDIR}
 external-controller: 0.0.0.0:${PORT_UI}
 external-ui: ${RO_DIR}/ui
-
-# === DNS 增强 (SmartDNS 国内加速 + 海外防污染) ===
-dns:
-  enable: true
-  listen: 0.0.0.0:5353
-  enhanced-mode: fake-ip
-  fake-ip-range: 198.18.0.1/16
-  fake-ip-filter:
-    - "*.lan"
-    - "*.local"
-    - "*.localhost"
-  nameserver:
-    - 127.0.0.1:6053
-  fallback:
-    - tls://8.8.4.4:853
-    - tls://1.0.0.1:853
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-
-# === 广告拦截规则集 ===
-rule-providers:
-  anti-ad:
-    type: http
-    behavior: domain
-    url: "https://anti-ad.net/clash.yaml"
-    path: ./ruleset/anti-ad.yaml
-    interval: 86400
+secret: ''
+allow-lan: true
+mode: rule
+log-level: info
 YAMLEOF
-
-        # 在已有 rules 前注入广告拦截规则
-        if grep -q "^rules:" "${TMP_CONF}"; then
-            sed -i '/^rules:/a\  - RULE-SET,anti-ad,REJECT' "${TMP_CONF}"
-        fi
-        mv -f "${TMP_CONF}" "${CONF_FILE}"
-        mtd_storage.sh save >/dev/null 2>&1 &
-        echo "订阅配置拉取并解析成功！"
+        cp -f "${TMP_CONF}" "${CONF_FILE}"
+        rm -f "${TMP_CONF}"
+        echo "订阅拉取并注入配置成功！"
         return 0
     else
-        echo "拉取失败或非有效 Clash 配置！"
+        echo "拉取订阅失败或返回无效 Clash 节点配置，保留现有配置。"
         rm -f "${TMP_CONF}"
         return 1
     fi
@@ -247,68 +215,60 @@ case "$1" in
             exit 0
         fi
 
-        # 如果尚无配置文件，尝试用 nvram 里的 ss_server (订阅链接) 拉取
-        if [ ! -f "${CONF_FILE}" ]; then
-            SUB_URL="$(nvram get ss_server)"
-            [ -n "${SUB_URL}" ] && update_subscription "${SUB_URL}"
+        # 如果已有订阅链接但无配置文件，尝试拉取
+        SUB_URL="$(nvram get ss_server)"
+        if [ ! -f "${CONF_FILE}" ] && [ -n "${SUB_URL}" ]; then
+            update_subscription "${SUB_URL}" || true
         fi
 
-        # 如果依然没有配置，提供极简备用配置以确保 WebUI 能够先行启动
-        # 已内置：DNS 增强（利用 SmartDNS 做上游）+ 广告拦截规则集
+        # 生成极简健壮备用配置（零外部远程规则依赖，确保 100% 成功启动并监听 9999 端口）
         if [ ! -f "${CONF_FILE}" ]; then
             cat > "${CONF_FILE}" <<YAMLEOF
 mixed-port: 7890
 redir-port: ${PORT_REDIR}
 external-controller: 0.0.0.0:${PORT_UI}
 external-ui: ${RO_DIR}/ui
+secret: ''
+allow-lan: true
 mode: rule
-log-level: warning
+log-level: info
 
-# === DNS 增强配置 (利用 SmartDNS 做国内上游，防污染) ===
 dns:
   enable: true
   listen: 0.0.0.0:5353
+  ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
   fake-ip-filter:
     - "*.lan"
     - "*.local"
-    - "*.localhost"
     - "router.asus.com"
     - "my.router"
   nameserver:
     - 127.0.0.1:6053
-  fallback:
-    - tls://8.8.4.4:853
-    - tls://1.0.0.1:853
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-
-proxies: []
-
-# === 广告拦截规则集 (anti-ad 精简高效规则) ===
-rule-providers:
-  anti-ad:
-    type: http
-    behavior: domain
-    url: "https://anti-ad.net/clash.yaml"
-    path: ./ruleset/anti-ad.yaml
-    interval: 86400
+    - 223.5.5.5
+    - 119.29.29.29
 
 rules:
-  - RULE-SET,anti-ad,REJECT
   - GEOIP,CN,DIRECT
   - MATCH,DIRECT
 YAMLEOF
         fi
 
-        echo "启动 Mihomo (Clash Meta) 核心..."
-        "${RO_DIR}/CrashCore" -d "${CONF_DIR}" -f "${CONF_FILE}" >/dev/null 2>&1 &
+        echo "启动 Mihomo (Clash Meta) 核心并监听控制端口 ${PORT_UI}..."
+        "${RO_DIR}/CrashCore" -d "${CRASH_DIR}" -f "${CONF_FILE}" > "${LOG_FILE}" 2>&1 &
         echo $! > "${PID_FILE}"
+        sleep 1
 
-        start_firewall
-        echo "ShellCrash 启动成功！Web 控制面板: http://192.168.123.1:${PORT_UI}/ui"
+        # 检测核心是否正常存活
+        if kill -0 $(cat "${PID_FILE}" 2>/dev/null) 2>/dev/null; then
+            start_firewall
+            LAN_IP="$(nvram get lan_ipaddr || echo 192.168.123.1)"
+            logger -st "ShellCrash" "ShellCrash 核心启动成功！Web 控制面板: http://${LAN_IP}:${PORT_UI}/ui"
+        else
+            logger -st "ShellCrash" "警告: CrashCore 核心启动异常退出！最近日志:"
+            tail -n 10 "${LOG_FILE}" 2>/dev/null | while read line; do logger -st "ShellCrash" "$line"; done
+        fi
         ;;
     stop)
         echo "停止 ShellCrash 服务..."
@@ -433,48 +393,51 @@ cat > "${WEB_ASP}" <<'ASPEOF'
 <script type="text/javascript" src="/help.js"></script>
 
 <script>
-// 声明 shadowsocks_status 函数占位，防止 ASP 模板引擎调用时报错
 <% shadowsocks_status(); %>
 
 var $j = jQuery.noConflict();
 
-// 初始化 iToggle 开关绑定
 $j(document).ready(function(){
     init_itoggle('ss_enable');
 });
 
-// 页面初始化入口
 function initial(){
     show_banner(2);
-    // show_menu 参数: L1=5(高级设置), L2=13(shadowsocks菜单项索引), L3=1(第一个子标签)
     show_menu(5,13,1);
     show_footer();
+
+    // 如果 ss_server 仍是默认占位符 127.0.0.1，清空以便展示提示文字
+    var srv = document.form.ss_server;
+    if (srv && srv.value === "127.0.0.1") {
+        srv.value = "";
+    }
+
     checkCrashStatus();
 }
 
-// 检测 ShellCrash/Mihomo 是否在运行
 function checkCrashStatus(){
-    var statusEl = $j('#crash_status');
-    // 通过尝试加载 WebUI 资源检测服务状态
-    var img = new Image();
-    img.onload = function(){
-        statusEl.html('<span style="color:#468847;font-weight:bold;">● 运行中 (Mihomo Meta)</span>');
-    };
-    img.onerror = function(){
-        statusEl.html('<span style="color:#b94a48;font-weight:bold;">● 已停止</span>');
-    };
-    img.src = 'http://' + window.location.hostname + ':9999/ui/favicon.ico?' + Math.random();
+    var host = window.location.hostname;
+    $j.ajax({
+        url: 'http://' + host + ':9999/',
+        type: 'GET',
+        dataType: 'json',
+        timeout: 2000,
+        success: function(data){
+            $j('#crash_status').html('<span class="label label-success" style="padding: 4px 8px;">● 核心运行中 (Mihomo/Meta)</span>');
+        },
+        error: function(){
+            $j('#crash_status').html('<span class="label label-warning" style="padding: 4px 8px;">● 未就绪 / 启动中</span>');
+        }
+    });
 }
 
-// 打开 WebUI 控制面板
 function openWebUI(){
     window.open('http://' + window.location.hostname + ':9999/ui', '_blank');
 }
 
-// 保存表单并触发后端服务重启
 function applyRule(){
     showLoading();
-    document.form.action_mode.value = " Applying ";
+    document.form.action_mode.value = " Restart ";
     document.form.current_page.value = "Shadowsocks.asp";
     document.form.next_page.value = "";
     document.form.action_script.value = "restart_ss";
@@ -483,122 +446,143 @@ function applyRule(){
 </script>
 </head>
 
-<body onload="initial();">
-<div id="TopBanner"></div>
-<div id="Loading" class="popup_bg"></div>
-<iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
+<body onload="initial();" onunLoad="return unload_body();">
 
-<form method="post" name="form" action="/start_apply.htm" target="hidden_frame">
-<input type="hidden" name="current_page" value="Shadowsocks.asp">
-<input type="hidden" name="next_page" value="">
-<input type="hidden" name="next_host" value="">
-<input type="hidden" name="sid_list" value="ShadowsocksConf;">
-<input type="hidden" name="group_id" value="">
-<input type="hidden" name="action_mode" value=" Applying ">
-<input type="hidden" name="action_script" value="restart_ss">
+<div class="wrapper">
+    <div class="container-fluid" style="padding-right: 0px">
+        <div class="row-fluid">
+            <div class="span3"><center><div id="logo"></div></center></div>
+            <div class="span9">
+                <div id="TopBanner"></div>
+            </div>
+        </div>
+    </div>
 
-<div class="container-fluid" style="padding-top: 0px;">
-    <div class="row-fluid">
-        <div class="span3"><div id="Menu"></div></div>
+    <div id="Loading" class="popup_bg"></div>
 
-        <div class="span9">
-            <div class="box well grad_colour_dark_blue">
-                <h2 class="box_head round_top"><#menu5_16#></h2>
-                <div class="round_bottom">
-                    <div class="row-fluid">
-                        <div id="tabMenu" class="submenuBlock"></div>
+    <iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
+    <form method="post" name="form" id="ruleForm" action="/start_apply.htm" target="hidden_frame">
+    <input type="hidden" name="current_page" value="Shadowsocks.asp">
+    <input type="hidden" name="next_page" value="">
+    <input type="hidden" name="next_host" value="">
+    <input type="hidden" name="sid_list" value="ShadowsocksConf;">
+    <input type="hidden" name="group_id" value="">
+    <input type="hidden" name="action_mode" value=" Restart ">
+    <input type="hidden" name="action_script" value="restart_ss">
 
-                        <div style="margin: 4px 8px 0px 8px;">
-                            <div class="alert alert-info" style="margin-top: 10px;">
-                                <strong>红米 AC2100 高性能专版：</strong>
-                                已内置 Mihomo (Clash Meta) 1000MHz 软浮点核心与 Yacd 图形化控制面板。
-                                支持通用的 Clash / V2Ray / SS / SSR / Trojan 订阅链接，国内直连、国外自动分流。
+    <div class="container-fluid">
+        <div class="row-fluid">
+            <div class="span3">
+                <!--Sidebar content-->
+                <div class="well sidebar-nav side_nav" style="padding: 0px;">
+                    <ul id="mainMenu" class="clearfix"></ul>
+                    <ul class="clearfix">
+                        <li>
+                            <div id="subMenu" class="accordion"></div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="span9">
+                <!--Body content-->
+                <div class="row-fluid">
+                    <div class="span12">
+                        <div class="box well grad_colour_dark_blue">
+                            <h2 class="box_head round_top"><#menu5_16#></h2>
+                            <div class="round_bottom">
+                                <div class="row-fluid">
+                                    <div id="tabMenu" class="submenuBlock"></div>
+
+                                    <div style="margin: 6px 12px 0px 12px;">
+                                        <div class="alert alert-info" style="margin-top: 6px; margin-bottom: 12px;">
+                                            <strong>红米 AC2100 极简高性能专版：</strong>
+                                            内置 Mihomo (Clash Meta) 软浮点核心与 Yacd 图形控制面板。支持 SS / SSR / VMess / VLESS / Trojan / Hysteria2 全协议。
+                                        </div>
+
+                                        <table width="100%" cellpadding="4" cellspacing="0" class="table">
+                                            <tr>
+                                                <th colspan="2" style="background-color: #E3E3E3;">基本开关与状态</th>
+                                            </tr>
+                                            <tr>
+                                                <th width="40%">启用 ShellCrash:</th>
+                                                <td>
+                                                    <div class="main_itoggle">
+                                                        <div id="ss_enable_on_of">
+                                                            <input type="checkbox" id="ss_enable_fake"
+                                                                <% nvram_match_x("", "ss_enable", "1", "value=1 checked"); %>
+                                                                <% nvram_match_x("", "ss_enable", "0", "value=0"); %>>
+                                                        </div>
+                                                    </div>
+                                                    <div style="position: absolute; margin-left: -10000px;">
+                                                        <input type="radio" name="ss_enable" id="ss_enable_1" value="1"
+                                                            <% nvram_match_x("", "ss_enable", "1", "checked"); %>>
+                                                        <input type="radio" name="ss_enable" id="ss_enable_0" value="0"
+                                                            <% nvram_match_x("", "ss_enable", "0", "checked"); %>>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <th>服务运行状态:</th>
+                                                <td>
+                                                    <span id="crash_status"><span class="label label-info">检测中...</span></span>
+                                                    &nbsp;&nbsp;
+                                                    <input type="button" class="btn btn-success btn-mini" value="打开 Web 控制面板 ↗" onclick="openWebUI();">
+                                                </td>
+                                            </tr>
+
+                                            <tr>
+                                                <th colspan="2" style="background-color: #E3E3E3;">机场订阅配置</th>
+                                            </tr>
+                                            <tr>
+                                                <th>订阅链接 URL:</th>
+                                                <td>
+                                                    <input type="text" maxlength="512" class="input" size="60"
+                                                        name="ss_server" id="ss_server" style="width: 85%; font-family: monospace;"
+                                                        placeholder="粘贴您的 Clash / 通用订阅链接 (http/https 开头)"
+                                                        value="<% nvram_get_x("","ss_server"); %>" />
+                                                    <div style="margin-top: 6px; color: #888; font-size: 12px;">
+                                                        粘贴订阅链接后点击下方「应用本页面设置」，路由器将自动拉取节点配置并启动分流代理。
+                                                    </div>
+                                                </td>
+                                            </tr>
+
+                                            <tr>
+                                                <th colspan="2" style="background-color: #E3E3E3;">Yacd Web 控制面板</th>
+                                            </tr>
+                                            <tr>
+                                                <th>面板访问地址:</th>
+                                                <td>
+                                                    <code>http://<% nvram_get_x("","lan_ipaddr"); %>:9999/ui</code>
+                                                    &nbsp;&nbsp;
+                                                    <input type="button" class="btn btn-info btn-mini" value="在新窗口打开 ↗" onclick="openWebUI();">
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <th>功能说明:</th>
+                                                <td style="color: #666;">
+                                                    启动服务后可通过上方地址访问 Yacd 仪表盘，进行节点测速、分流规则切换（规则/全局/直连）等操作。
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td colspan="2" style="text-align: center; padding: 15px;">
+                                                    <input class="btn btn-primary" style="width: 219px;" type="button"
+                                                        value="<#CTL_apply#>" onclick="applyRule();" />
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </div>
+                                </div>
                             </div>
-
-                            <table width="100%" cellpadding="4" cellspacing="0" class="table">
-                                <!-- 基本设置区 -->
-                                <tr>
-                                    <th colspan="2" style="background-color: #E3E3E3;"><#menu5_16_1#></th>
-                                </tr>
-                                <tr>
-                                    <th width="50%"><#menu5_16_2#></th>
-                                    <td>
-                                        <div class="main_itoggle">
-                                            <div id="ss_enable_on_of">
-                                                <input type="checkbox" id="ss_enable_fake"
-                                                    <% nvram_match_x("", "ss_enable", "1", "value=1 checked"); %>
-                                                    <% nvram_match_x("", "ss_enable", "0", "value=0"); %>>
-                                            </div>
-                                        </div>
-                                        <div style="position: absolute; margin-left: -10000px;">
-                                            <input type="radio" name="ss_enable" id="ss_enable_1" value="1"
-                                                <% nvram_match_x("", "ss_enable", "1", "checked"); %>>
-                                            <input type="radio" name="ss_enable" id="ss_enable_0" value="0"
-                                                <% nvram_match_x("", "ss_enable", "0", "checked"); %>>
-                                        </div>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th width="50%">服务运行状态</th>
-                                    <td>
-                                        <span id="crash_status"><span style="color:#999;">● 检测中...</span></span>
-                                        &nbsp;&nbsp;
-                                        <input type="button" class="btn btn-success btn-mini" value="打开 Web 控制面板 ↗" onclick="openWebUI();">
-                                    </td>
-                                </tr>
-
-                                <!-- 订阅配置区 -->
-                                <tr>
-                                    <th colspan="2" style="background-color: #E3E3E3;"><#menu5_16_3#></th>
-                                </tr>
-                                <tr>
-                                    <th width="50%"><#menu5_16_4#></th>
-                                    <td>
-                                        <input type="text" maxlength="512" class="input" size="60"
-                                            name="ss_server" style="width: 450px; font-family: monospace;"
-                                            placeholder="粘贴您的 Clash / V2Ray / 通用订阅链接"
-                                            value="<% nvram_get_x("","ss_server"); %>" />
-                                        <div style="margin-top: 6px; color: #888; font-size: 12px;">
-                                            粘贴订阅链接后点击下方"应用"按钮，路由器将自动拉取节点配置并启动分流服务。
-                                        </div>
-                                    </td>
-                                </tr>
-
-                                <!-- WebUI 信息区 -->
-                                <tr>
-                                    <th colspan="2" style="background-color: #E3E3E3;">Yacd Web 控制面板</th>
-                                </tr>
-                                <tr>
-                                    <th width="50%">面板访问地址</th>
-                                    <td>
-                                        <span style="font-family: monospace;">http://192.168.123.1:9999/ui</span>
-                                        &nbsp;&nbsp;
-                                        <input type="button" class="btn btn-info btn-mini" value="在新窗口打开 ↗" onclick="openWebUI();">
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th width="50%">功能说明</th>
-                                    <td style="color: #666;">
-                                        启动服务后可通过上方地址访问 Yacd 图形化面板，进行节点选择、延迟测速、分流策略切换等操作。
-                                    </td>
-                                </tr>
-                            </table>
-
-                            <div style="text-align: center; margin: 15px 0 10px;">
-                                <input class="btn btn-primary" style="width: 219px;" type="button"
-                                    value="<#CTL_apply#>" onclick="applyRule();" />
-                            </div>
-
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+    </form>
+    <div id="footer"></div>
 </div>
-</form>
-
-<div id="Footer"></div>
 </body>
 </html>
 ASPEOF

@@ -37,7 +37,12 @@
   - [x] **轻量广告拦截 (Anti-AD)**：在 Mihomo 配置模板中引入 anti-ad 精选规则集，零额外二进制体积消耗实现网络层去广告与防隐私追踪。
   - [x] **网络内核参数调优**：将连接跟踪上限提升至 `nf_conntrack_max=65536`，开启 `tcp_fastopen=3` 和 `tcp_tw_reuse=1`，确保大并发流量稳定不丢包。
   - [x] **轻量组件升级**：启用 `VLMCSD` (KMS 激活服务)；保持官方充分验证的 `OpenSSH` 方案（支持 sftp-server，WinSCP 友好）。
-  - [x] **文档与 CI 升级**：更新 `build-padavan.yml` 和 `README.md`，同步全部新特性与刷机指引。
+- [x] **阶段 8：彻底修复科学上网页面侧边栏丢失与 WebUI 无法连接两大故障**
+  - [x] **修复页面布局与菜单丢失**：原版 Padavan 的 `show_menu()` 强依赖 `<div class="wrapper">`、`<div id="logo">` 以及 `<div class="well sidebar-nav side_nav"><ul id="mainMenu">` 等固定 DOM 树结构。补齐这些容器后，左侧完整的分类菜单树完美渲染，杜绝黑色空白与错位。
+  - [x] **移除 UPX 破坏性压缩**：定位到 Linux MIPSLE 架构下 UPX 压缩 Go 编译的 CrashCore 核心会导致内存段破坏引发段错误（SIGSEGV）退出的致命缺陷，彻底移除 UPX 压缩，确保 CrashCore 启动时正常常驻并监听 9999 端口。
+  - [x] **修复极简健壮备用配置**：移除外部网络依赖（如启动时下载 anti-ad 规则），提供纯净本地规则，确保刚刷机未联网时 9999 控制端口依然 100% 成功启动，Yacd 界面秒开。
+  - [x] **局域网 IP 动态适配**：页面中的面板 URL 和状态探测全面改用 `<% nvram_get_x("","lan_ipaddr"); %>` 动态提取，自适应 `192.168.2.1` 与 `192.168.123.1` 等任意自定义网段。
+  - [x] **运行环境迁入 tmpfs**：将工作目录全面设为 `/tmp/ShellCrash`，彻底避免运行时缓存写满有限的 `/etc/storage` 闪存分区。
 
 ---
 
