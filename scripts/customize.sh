@@ -47,17 +47,21 @@ mkdir -p "${XRAY_DIR}"
 
 # 检查是否已存在 xray 二进制，若无则拉取官方 Release
 if [ ! -f "${XRAY_DIR}/xray" ]; then
-    echo "    从官方 Release 下载最新稳定版 Xray-linux-mips32le.zip..."
+    echo "    从官方直链下载最新稳定版 Xray-linux-mips32le.zip..."
     XRAY_TMP="/tmp/xray_dl"
     rm -rf "${XRAY_TMP}" && mkdir -p "${XRAY_TMP}"
     
-    # 获取最新 release 的下载地址，降级备用链接
-    LATEST_TAG=$(curl -sL https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name":' | head -n 1 | cut -d '"' -f 4)
-    [ -z "${LATEST_TAG}" ] && LATEST_TAG="v26.3.27"
-    XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/${LATEST_TAG}/Xray-linux-mips32le.zip"
+    XRAY_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-mips32le.zip"
+    echo "    下载地址: ${XRAY_URL}"
     
-    echo "    下载目标版本: ${LATEST_TAG} (${XRAY_URL})"
-    curl -sSL -o "${XRAY_TMP}/xray.zip" "${XRAY_URL}"
+    # 尝试下载，支持重试与跟随重定向
+    curl -fL --retry 3 --retry-delay 2 -o "${XRAY_TMP}/xray.zip" "${XRAY_URL}"
+    
+    # 验证是否为合法 zip，若异常则使用备用稳定版本
+    if ! unzip -tq "${XRAY_TMP}/xray.zip" >/dev/null 2>&1; then
+        echo "    最新版本校验异常，尝试拉取备用稳定版本..."
+        curl -fL --retry 3 -o "${XRAY_TMP}/xray.zip" "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-mips32le.zip"
+    fi
     unzip -q -o "${XRAY_TMP}/xray.zip" -d "${XRAY_TMP}"
     
     cp -f "${XRAY_TMP}/xray" "${XRAY_DIR}/xray"

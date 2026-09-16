@@ -23,7 +23,7 @@
   - [x] 提交所有代码至 GitHub 仓库并推送远端。
   - [x] 首次云端构建日志排查：定位到 `trunk/user/dropbear` 在 cross-configure 时缺少 staging zlib 路径。
   - [x] 修复措施：切换使用官方成熟且经过长期验证的 OpenSSH 方案（自带 sftp-server 支持），并在构建脚本中双重补全 dropbear 头文件路径。
-  - [x] **固件本体编译已 100% 成功！** 成功生成超频至 1000MHz 且内置 Shadowsocks/Xray 的 RM2100 固件并上传 Artifacts。
+  - [x] 修复措施：改用 GitHub Release 官方直链 `releases/latest/download` 方式下载 Xray，彻底规避 API 限流导致的 zip 文件损坏。
   - [x] 在工作流中声明 `permissions: contents: write`，解除 GitHub Releases 发布的 403 权限限制。
 
 ---
