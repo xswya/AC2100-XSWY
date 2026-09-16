@@ -89,7 +89,21 @@ if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
     fi
     # 注入智能自适应脚本：自动识别路由器 IP 与端口，免手动输入跳过登录页秒进后台
     if [ -f "${SC_PKG_DIR}/dist/ui/index.html" ]; then
-        sed -i 's|<head>|<head><script>try{var h=window.location.hostname,p=window.location.port||"9999";if(window.location.search.indexOf("hostname")===-1){var s=window.location.search?"\&":"?";window.location.replace(window.location.pathname+window.location.search+s+"hostname="+h+"\&port="+p);}}catch(e){}</script>|g' "${SC_PKG_DIR}/dist/ui/index.html"
+        python3 - "${SC_PKG_DIR}/dist/ui/index.html" <<'PYEOF' || true
+import sys
+if len(sys.argv) > 1:
+    path = sys.argv[1]
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            html = f.read()
+        patch = '<head><script>try{var h=window.location.hostname,p=window.location.port||"9999";if(window.location.search.indexOf("hostname")===-1){var s=window.location.search?"&":"?";window.location.replace(window.location.pathname+window.location.search+s+"hostname="+h+"&port="+p);}}catch(e){}</script>'
+        if '<head>' in html and 'hostname=' not in html:
+            html = html.replace('<head>', patch, 1)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(html)
+    except Exception:
+        pass
+PYEOF
     fi
 fi
 
