@@ -46,6 +46,11 @@
   - [x] **崩溃根因定位**：通过路由器抓取的 `crash.log` 定位到 `Parse config error: rules[0] [GEOIP,CN,DIRECT] error: can't download MMDB: Get ... tls: failed to verify certificate: x509: certificate signed by unknown authority`。Clash.Meta 解析到 GEOIP 规则且本地缺少 MMDB 数据库时触发强制联网下载，而 Padavan 极简系统缺少公共 CA 根证书导致 TLS 校验失败，触发 `level=fatal` 致命错误直接退出进程，导致 9999 端口无监听。
   - [x] **备用规则纯净化**：彻底剔除备用配置中所有带有外部下载依赖的 `GEOIP,CN,DIRECT` 规则，仅保留单条 `MATCH,DIRECT`，确保开机与无订阅状态下 100% 成功启动 9999 端口。
   - [x] **固件内置离线 MMDB**：在构建阶段自动集成精简版离线 `Country.mmdb`（约 400KB）至 `/etc_ro/ShellCrash/`，启动脚本自动软链接到 `/tmp/ShellCrash/Country.mmdb` 和 `geoip.metadb`，即使后续导入的订阅规则含有 GEOIP 也能本地秒解，杜绝触发网络下载与证书报错。
+- [x] **阶段 10：订阅拉取全面健壮化 + YAML 去重 + Yacd 免登录 + OpenSSH 开箱即用**
+  - [x] **订阅 Clash UA 自适配**：修复 V2board 等机场在无 `User-Agent: clash` 时仅下发 Base64 通用节点的问题。`update_subscription` 现在自动携带 `-A "clash"` 请求头与 `&flag=clash` 查询参数，确保任何机场均返回完整 YAML 配置。
+  - [x] **YAML 顶层键去重**：订阅配置注入前，主动扫描并剔除机场源配置中已存在的 `allow-lan`、`mode`、`log-level` 等顶层字段，彻底杜绝 `mapping key already defined` 致命解析崩溃。
+  - [x] **Yacd 免登录直达**：在构建阶段用 Python Heredoc 向 Yacd `index.html` 注入自适应 JS 脚本，自动补齐路由器 IP 与端口参数，用户打开面板后零手动输入直达后台。同时修复原 sed 注入因 JavaScript 特殊字符引发的 `unknown option to 's'` 构建报错。
+  - [x] **OpenSSH 开箱即用**：在 `post_wan_script.sh` 自启脚本中注入 OpenSSH 自愈逻辑——新固件首次开机自动检测 `/etc/storage/openssh/sshd_config` 是否存在，缺失时自动创建配置文件、生成 RSA/ED25519 主机密钥、持久化到闪存并重启 sshd，彻底解决 `Connection reset by peer` 无法 SSH 登录的问题。
 
 ---
 
