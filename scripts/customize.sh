@@ -254,4 +254,10 @@ if ! grep -q "CONFIG_FIRMWARE_INCLUDE_XRAY" "${WORK_DIR}/trunk/user/Makefile"; t
     sed -i '/dir_\$(SHADOWSOCKS_ENABLE).*+= shadowsocks/a dir_\$(CONFIG_FIRMWARE_INCLUDE_XRAY) += xray' "${WORK_DIR}/trunk/user/Makefile"
 fi
 
+# 修复 dropbear Makefile 中缺少 staging 头文件/库目录导致的 configure 失败 (双重保障)
+if [ -f "${WORK_DIR}/trunk/user/dropbear/Makefile" ]; then
+    echo "    补全 trunk/user/dropbear/Makefile 中的 staging 依赖查找路径..."
+    sed -i 's|\./configure \\|CFLAGS="\$(CFLAGS) -I\$(STAGEDIR)/include" LDFLAGS="\$(LDFLAGS) -L\$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
+fi
+
 echo ">>> [5/5] 红米 AC2100 定制流程执行完毕，已就绪！"

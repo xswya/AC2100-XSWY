@@ -21,7 +21,9 @@
   - [x] 完善使用与刷机文档 `README.md`。
 - [x] **阶段 4：提交与远端推送**
   - [x] 提交所有代码至 GitHub 仓库并推送远端。
-  - [x] 准备就绪，可随时在 GitHub Actions 触发编译。
+  - [x] 首次云端构建日志排查：定位到 `trunk/user/dropbear` 在 cross-configure 时缺少 staging zlib 路径。
+  - [x] 修复措施：切换使用官方成熟且经过长期验证的 OpenSSH 方案（自带 sftp-server 支持），并在构建脚本中双重补全 dropbear 头文件路径。
+  - [x] 重新推送并触发二次云端编译。
 
 ---
 
