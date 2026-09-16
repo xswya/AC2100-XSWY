@@ -19,14 +19,13 @@
   - [x] 编写定制与集成脚本 `scripts/customize.sh`（集成 Shadowsocks 与 Xray 核心、分流规则）。
   - [x] 编写 GitHub Actions 工作流 `.github/workflows/build-padavan.yml`。
   - [x] 完善使用与刷机文档 `README.md`。
-- [x] **阶段 4：提交与远端推送**
-  - [x] 提交所有代码至 GitHub 仓库并推送远端。
-  - [x] 首次云端构建日志排查：定位到 `trunk/user/dropbear` 在 cross-configure 时缺少 staging zlib 路径。
-  - [x] 修复措施：切换使用官方成熟且经过长期验证的 OpenSSH 方案（自带 sftp-server 支持），并在构建脚本中双重补全 dropbear 头文件路径。
-  - [x] 修复措施：改用 GitHub Release 官方直链 `releases/latest/download` 方式下载 Xray，彻底规避 API 限流导致的 zip 文件损坏。
-  - [x] 在工作流中声明 `permissions: contents: write`，解除 GitHub Releases 发布的 403 权限限制。
-  - [x] **GitHub Actions 全绿构建成功 (Run 35055629773)**！固件已发布至 Releases 与 Artifacts。
-  - [x] 确立在极简高性能 Padavan 下配合 ShellCrash（Mihomo/Clash 核心）的订阅管理方案，更新教程指南。
+- [x] **阶段 4：首次云端构建与排障完成**
+  - [x] 完成内核超频、SFE 转发、OpenSSH 与基础环境验证。
+  - [x] GitHub Actions 流水线跑通并生成正式 Release。
+- [x] **阶段 5：ShellCrash 固件全内置与原生 WebUI 订阅管理升级**
+  - [x] 固件 ROMFS 离线全内置：ShellCrash 核心框架、Mihomo (Clash Meta) 1000MHz 软浮点高性能核心（UPX压缩）、MetaCubeXD Web 控制面板。
+  - [x] 老毛子 WebUI 重构升级：提供专属的 ShellCrash 科学上网控制台，支持直接在网页粘贴订阅链接一键拉取节点，内嵌可视化测速仪表盘。
+  - [x] 对接后台系统生命周期，用户无需打开黑窗口敲任何命令行，彻底实现真正的开箱即用。
 
 ---
 

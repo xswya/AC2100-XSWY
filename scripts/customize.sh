@@ -5,8 +5,9 @@
 # 功能描述: 自动化源码定制脚本
 #   1. 注入 MT7621 CPU 1000MHz 寄存器超频补丁
 #   2. 部署精简版单板编译配置 (RM2100.config)
-#   3. 集成最新 MIPSLE 架构的 Xray-core 核心与透明代理自动化控制脚本
-#   4. 预置 Shadowsocks / Xray 依赖环境与开箱即用规则
+#   3. 集成 ShellCrash 框架 + Mihomo (Clash Meta) 核心 + MetaCubeXD WebUI
+#   4. 深度升级老毛子 WebUI：原生支持直接粘贴订阅、一键测速与内嵌仪表盘
+#   5. 对接 shadowsocks.sh 生命周期，开箱即用稳定透明代理
 # ==============================================================================
 
 set -eo pipefail
@@ -15,13 +16,13 @@ WORK_DIR="${1:-$(pwd)}"
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches"
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/configs"
 
-echo ">>> [1/5] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
+echo ">>> [1/6] 开始执行红米 AC2100 (RM2100) 源码定制流程..."
 echo "    源码目录: ${WORK_DIR}"
 
 cd "${WORK_DIR}"
 
 # 1. 注入 1000MHz 超频补丁
-echo ">>> [2/5] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
+echo ">>> [2/6] 注入 MT7621 CPU 1000MHz 超频内核补丁..."
 if [ -f "${PATCH_DIR}/001-mt7621-1000mhz.patch" ]; then
     if patch -p1 -N --dry-run < "${PATCH_DIR}/001-mt7621-1000mhz.patch" >/dev/null 2>&1; then
         patch -p1 < "${PATCH_DIR}/001-mt7621-1000mhz.patch"
@@ -34,212 +35,223 @@ else
 fi
 
 # 2. 部署精简单板配置文件
-echo ">>> [3/5] 部署精简版板级配置文件 RM2100.config..."
+echo ">>> [3/6] 部署精简版板级配置文件 RM2100.config..."
 if [ -f "${CONFIG_DIR}/RM2100.config" ]; then
     cp -f "${CONFIG_DIR}/RM2100.config" "${WORK_DIR}/trunk/configs/templates/RM2100.config"
     echo "    已更新 trunk/configs/templates/RM2100.config"
 fi
 
-# 3. 集成 Xray 核心插件
-echo ">>> [4/5] 集成 MIPSLE 架构 Xray-core 模块..."
-XRAY_DIR="${WORK_DIR}/trunk/user/xray"
-mkdir -p "${XRAY_DIR}"
+# 3. 准备并打包 ShellCrash + Mihomo 核心 + MetaCubeXD WebUI 面板
+echo ">>> [4/6] 构建并打包 ShellCrash 离线全套资产 (Mihomo 核心 + WebUI)..."
+SC_PKG_DIR="${WORK_DIR}/trunk/user/shellcrash"
+mkdir -p "${SC_PKG_DIR}/dist"
 
-# 检查是否已存在 xray 二进制，若无则拉取官方 Release
-if [ ! -f "${XRAY_DIR}/xray" ]; then
-    echo "    从官方直链下载最新稳定版 Xray-linux-mips32le.zip..."
-    XRAY_TMP="/tmp/xray_dl"
-    rm -rf "${XRAY_TMP}" && mkdir -p "${XRAY_TMP}"
-    
-    XRAY_URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-mips32le.zip"
-    echo "    下载地址: ${XRAY_URL}"
-    
-    # 尝试下载，支持重试与跟随重定向
-    curl -fL --retry 3 --retry-delay 2 -o "${XRAY_TMP}/xray.zip" "${XRAY_URL}"
-    
-    # 验证是否为合法 zip，若异常则使用备用稳定版本
-    if ! unzip -tq "${XRAY_TMP}/xray.zip" >/dev/null 2>&1; then
-        echo "    最新版本校验异常，尝试拉取备用稳定版本..."
-        curl -fL --retry 3 -o "${XRAY_TMP}/xray.zip" "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-mips32le.zip"
-    fi
-    unzip -q -o "${XRAY_TMP}/xray.zip" -d "${XRAY_TMP}"
-    
-    cp -f "${XRAY_TMP}/xray" "${XRAY_DIR}/xray"
-    chmod +x "${XRAY_DIR}/xray"
-    
-    # 尝试使用 UPX 压缩以节约 ROM 空间 (MT7621 解压极快)
-    if command -v upx >/dev/null 2>&1; then
-        echo "    正在使用 UPX 对 Xray 进行高强度压缩优化..."
-        upx -9 "${XRAY_DIR}/xray" || true
-    fi
-    rm -rf "${XRAY_TMP}"
+SC_TMP="/tmp/sc_build"
+rm -rf "${SC_TMP}" && mkdir -p "${SC_TMP}"
+
+# 3.1 下载 ShellCrash 脚本包 (约 180KB)
+if [ ! -f "${SC_PKG_DIR}/dist/ShellCrash.tar.gz" ]; then
+    echo "    下载 ShellCrash 框架脚本包..."
+    curl -fL --retry 3 -o "${SC_TMP}/ShellCrash.tar.gz" "https://fastly.jsdelivr.net/gh/juewuy/ShellCrash@master/ShellCrash.tar.gz" || \
+    curl -fL --retry 3 -o "${SC_TMP}/ShellCrash.tar.gz" "https://raw.githubusercontent.com/juewuy/ShellCrash/master/ShellCrash.tar.gz"
+    cp -f "${SC_TMP}/ShellCrash.tar.gz" "${SC_PKG_DIR}/dist/ShellCrash.tar.gz"
 fi
 
-# 编写 Xray 默认配置模版
-cat > "${XRAY_DIR}/config.json" <<'EOF'
-{
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "tag": "transparent",
-      "port": 12345,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "network": "tcp,udp",
-        "followRedirect": true
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"]
-      }
-    },
-    {
-      "tag": "socks",
-      "port": 10808,
-      "protocol": "socks",
-      "settings": {
-        "auth": "noauth",
-        "udp": true
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "tag": "proxy",
-      "protocol": "vless",
-      "settings": {
-        "vnext": [
-          {
-            "address": "example.your-server.com",
-            "port": 443,
-            "users": [
-              {
-                "id": "00000000-0000-0000-0000-000000000000",
-                "encryption": "none",
-                "flow": "xtls-rprx-vision"
-              }
-            ]
-          }
-        ]
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "fingerprint": "chrome",
-          "serverName": "gateway.icloud.com",
-          "publicKey": "YourPublicKeyHere",
-          "shortId": "YourShortIdHere",
-          "spiderX": ""
-        }
-      }
-    },
-    {
-      "tag": "direct",
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
-}
-EOF
+# 3.2 下载 Mihomo (Clash Meta) mipsle-softfloat 高性能软浮点核心 (UPX 压缩后约 10MB)
+if [ ! -f "${SC_PKG_DIR}/dist/CrashCore" ]; then
+    echo "    下载最新版 Mihomo (Clash Meta) MIPSLE 软浮点核心..."
+    MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-linux-mipsle-softfloat-v1.19.31.gz"
+    curl -fL --retry 3 -o "${SC_TMP}/mihomo.gz" "${MIHOMO_URL}"
+    gzip -d "${SC_TMP}/mihomo.gz"
+    
+    if command -v upx >/dev/null 2>&1; then
+        echo "    正在使用 UPX 深度压缩 Mihomo 核心以节省 ROM 空间..."
+        upx -9 "${SC_TMP}/mihomo" || true
+    fi
+    cp -f "${SC_TMP}/mihomo" "${SC_PKG_DIR}/dist/CrashCore"
+    chmod +x "${SC_PKG_DIR}/dist/CrashCore"
+fi
 
-# 编写透明代理启动与规则管理脚本 xray-run.sh
-cat > "${XRAY_DIR}/xray-run.sh" <<'EOF'
+# 3.3 下载 MetaCubeXD Web 控制面板 (约 2.5MB 纯静态网页)
+if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
+    echo "    下载 MetaCubeXD Web 控制台静态面板..."
+    UI_URL="https://github.com/MetaCubeX/metacubexd/releases/latest/download/compressed-dist.tgz"
+    curl -fL --retry 3 -o "${SC_TMP}/ui.tgz" "${UI_URL}"
+    mkdir -p "${SC_PKG_DIR}/dist/ui"
+    tar -zxf "${SC_TMP}/ui.tgz" -C "${SC_PKG_DIR}/dist/ui"
+fi
+rm -rf "${SC_TMP}"
+
+# 3.4 编写 ShellCrash 服务启动与透明代理控制脚本 (shellcrash-service.sh)
+cat > "${SC_PKG_DIR}/shellcrash-service.sh" <<'EOF'
 #!/bin/sh
 # ==============================================================================
-# Xray 路由透明代理控制脚本 (支持 TCP 重定向与绕过大陆 IPSet 分流)
+# ShellCrash (Mihomo/Clash) 自动化服务与透明代理管理脚本
 # ==============================================================================
 
-CONF_DIR="/etc/storage/xray"
-CONF_FILE="${CONF_DIR}/config.json"
-PID_FILE="/var/run/xray.pid"
-REDIR_PORT=12345
+CRASH_DIR="/tmp/ShellCrash"
+RO_DIR="/etc_ro/ShellCrash"
+CONF_DIR="/etc/storage/ShellCrash"
+CONF_FILE="${CONF_DIR}/config.yaml"
+PID_FILE="/var/run/CrashCore.pid"
+PORT_REDIR=7892
+PORT_UI=9999
 
-start_rules() {
-    echo "正在配置 iptables 透明代理转发规则..."
-    iptables -t nat -N XRAY 2>/dev/null || iptables -t nat -F XRAY
-
-    # 1. 忽略局域网及私有 IP 地址
-    iptables -t nat -A XRAY -d 0.0.0.0/8 -j RETURN
-    iptables -t nat -A XRAY -d 10.0.0.0/8 -j RETURN
-    iptables -t nat -A XRAY -d 127.0.0.0/8 -j RETURN
-    iptables -t nat -A XRAY -d 169.254.0.0/16 -j RETURN
-    iptables -t nat -A XRAY -d 172.16.0.0/12 -j RETURN
-    iptables -t nat -A XRAY -d 192.168.0.0/16 -j RETURN
-    iptables -t nat -A XRAY -d 224.0.0.0/4 -j RETURN
-    iptables -t nat -A XRAY -d 240.0.0.0/4 -j RETURN
-
-    # 2. 如果存在 chnroute IPSet，直接绕过大陆流量
-    if ipset list chnroute >/dev/null 2>&1; then
-        iptables -t nat -A XRAY -m set --match-set chnroute dst -j RETURN
+# 初始化运行目录 (RAM 快速环境)
+init_env() {
+    if [ ! -d "${CRASH_DIR}" ]; then
+        mkdir -p "${CRASH_DIR}" "${CONF_DIR}"
+        if [ -f "${RO_DIR}/ShellCrash.tar.gz" ]; then
+            tar -zxf "${RO_DIR}/ShellCrash.tar.gz" -C "${CRASH_DIR}"/ 2>/dev/null || true
+        fi
+        ln -sf "${RO_DIR}/CrashCore" "${CRASH_DIR}/CrashCore"
+        ln -sf "${RO_DIR}/ui" "${CRASH_DIR}/ui"
     fi
-
-    # 3. 其余 TCP 流量转发给本地 Xray 端口
-    iptables -t nat -A XRAY -p tcp -j REDIRECT --to-ports ${REDIR_PORT}
-    iptables -t nat -I PREROUTING -p tcp -j XRAY
 }
 
-stop_rules() {
-    echo "正在清理 iptables 透明代理规则..."
-    iptables -t nat -D PREROUTING -p tcp -j XRAY 2>/dev/null || true
-    iptables -t nat -F XRAY 2>/dev/null || true
-    iptables -t nat -X XRAY 2>/dev/null || true
+start_firewall() {
+    echo "配置透明代理 iptables 转发规则..."
+    iptables -t nat -N CLASH 2>/dev/null || iptables -t nat -F CLASH
+
+    # 保留私网与局域网段
+    iptables -t nat -A CLASH -d 0.0.0.0/8 -j RETURN
+    iptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN
+    iptables -t nat -A CLASH -d 127.0.0.0/8 -j RETURN
+    iptables -t nat -A CLASH -d 169.254.0.0/16 -j RETURN
+    iptables -t nat -A CLASH -d 172.16.0.0/12 -j RETURN
+    iptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN
+    iptables -t nat -A CLASH -d 224.0.0.0/4 -j RETURN
+    iptables -t nat -A CLASH -d 240.0.0.0/4 -j RETURN
+
+    # 绕过国内 IPSet (如果有)
+    if ipset list chnroute >/dev/null 2>&1; then
+        iptables -t nat -A CLASH -m set --match-set chnroute dst -j RETURN
+    fi
+
+    # TCP 重定向到 Clash 端口
+    iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports ${PORT_REDIR}
+    iptables -t nat -I PREROUTING -p tcp -j CLASH
+}
+
+stop_firewall() {
+    echo "清理透明代理 iptables 规则..."
+    iptables -t nat -D PREROUTING -p tcp -j CLASH 2>/dev/null || true
+    iptables -t nat -F CLASH 2>/dev/null || true
+    iptables -t nat -X CLASH 2>/dev/null || true
+}
+
+update_subscription() {
+    SUB_URL="$1"
+    [ -z "${SUB_URL}" ] && SUB_URL="$(nvram get sc_sub_url)"
+    if [ -z "${SUB_URL}" ]; then
+        echo "错误: 未提供机场订阅链接！"
+        return 1
+    fi
+    echo "正在从订阅链接拉取配置: ${SUB_URL} ..."
+    mkdir -p "${CONF_DIR}"
+    
+    # 优先拉取 Clash 订阅，支持订阅转换接口降级
+    TMP_CONF="/tmp/sub_config.yaml"
+    curl -kfsSL --retry 3 --connect-timeout 10 -o "${TMP_CONF}" "${SUB_URL}" || \
+    curl -kfsSL --retry 3 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')"
+    
+    if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
+        # 确保包含外部控制与 WebUI 端口设置
+        sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^redir-port:/d' "${TMP_CONF}" 2>/dev/null || true
+        
+        cat >> "${TMP_CONF}" <<YAMLEOF
+
+# === WebUI 与透明代理参数自动注入 ===
+redir-port: ${PORT_REDIR}
+external-controller: 0.0.0.0:${PORT_UI}
+external-ui: ${RO_DIR}/ui
+YAMLEOF
+        mv -f "${TMP_CONF}" "${CONF_FILE}"
+        mtd_storage.sh save >/dev/null 2>&1 &
+        echo "订阅配置拉取并解析成功！"
+        return 0
+    else
+        echo "拉取失败或非有效 Clash 配置！"
+        rm -f "${TMP_CONF}"
+        return 1
+    fi
 }
 
 case "$1" in
     start)
-        mkdir -p "${CONF_DIR}"
-        if [ ! -f "${CONF_FILE}" ]; then
-            cp /etc_ro/xray_config.json "${CONF_FILE}"
-        fi
-        
+        init_env
         if [ -f "${PID_FILE}" ] && kill -0 $(cat "${PID_FILE}") 2>/dev/null; then
-            echo "Xray 已经在运行中 (PID: $(cat ${PID_FILE}))"
+            echo "ShellCrash 已经在运行中！"
             exit 0
         fi
-        
-        echo "启动 Xray 服务..."
-        /usr/bin/xray run -c "${CONF_FILE}" >/dev/null 2>&1 &
+
+        # 如果尚无配置文件，尝试用 nvram 里的订阅链接拉取
+        if [ ! -f "${CONF_FILE}" ]; then
+            SUB_URL="$(nvram get sc_sub_url)"
+            [ -n "${SUB_URL}" ] && update_subscription "${SUB_URL}"
+        fi
+
+        # 如果依然没有配置，提供极简备用配置以确保 WebUI 能够先行启动
+        if [ ! -f "${CONF_FILE}" ]; then
+            cat > "${CONF_FILE}" <<YAMLEOF
+mixed-port: 7890
+redir-port: ${PORT_REDIR}
+external-controller: 0.0.0.0:${PORT_UI}
+external-ui: ${RO_DIR}/ui
+mode: rule
+log-level: warning
+proxies: []
+rules:
+  - GEOIP,CN,DIRECT
+  - MATCH,DIRECT
+YAMLEOF
+        fi
+
+        echo "启动 Mihomo (Clash Meta) 核心..."
+        "${RO_DIR}/CrashCore" -d "${CONF_DIR}" -f "${CONF_FILE}" >/dev/null 2>&1 &
         echo $! > "${PID_FILE}"
-        
-        start_rules
-        echo "Xray 透明代理已成功启动！"
+
+        start_firewall
+        echo "ShellCrash 启动成功！Web 控制面板: http://192.168.123.1:${PORT_UI}/ui"
         ;;
     stop)
-        echo "停止 Xray 服务..."
-        stop_rules
+        echo "停止 ShellCrash 服务..."
+        stop_firewall
         if [ -f "${PID_FILE}" ]; then
             kill $(cat "${PID_FILE}") 2>/dev/null || true
             rm -f "${PID_FILE}"
         fi
-        killall xray 2>/dev/null || true
-        echo "Xray 服务已停止。"
+        killall CrashCore 2>/dev/null || true
+        echo "ShellCrash 服务已停止。"
         ;;
     restart)
         $0 stop
         sleep 1
         $0 start
         ;;
+    update)
+        update_subscription "$2"
+        $0 restart
+        ;;
     status)
         if [ -f "${PID_FILE}" ] && kill -0 $(cat "${PID_FILE}") 2>/dev/null; then
-            echo "Xray 正在运行 (PID: $(cat ${PID_FILE}))"
+            echo "1"
         else
-            echo "Xray 未运行"
+            echo "0"
         fi
         ;;
     *)
-        echo "使用方法: $0 {start|stop|restart|status}"
+        echo "Usage: $0 {start|stop|restart|update|status}"
         exit 1
         ;;
 esac
 EOF
-chmod +x "${XRAY_DIR}/xray-run.sh"
+chmod +x "${SC_PKG_DIR}/shellcrash-service.sh"
 
-# 编写 Xray 模块的 Makefile
-cat > "${XRAY_DIR}/Makefile" <<'EOF'
+# 3.5 编写 user/shellcrash 的 Makefile
+cat > "${SC_PKG_DIR}/Makefile" <<'EOF'
 THISDIR = $(shell pwd)
 
 all:
@@ -247,21 +259,251 @@ all:
 clean:
 
 romfs:
-	$(ROMFSINST) -p +x $(THISDIR)/xray /usr/bin/xray
-	$(ROMFSINST) -p +x $(THISDIR)/xray-run.sh /usr/bin/xray-run.sh
-	$(ROMFSINST) $(THISDIR)/config.json /etc_ro/xray_config.json
+	mkdir -p $(ROMFSDIR)/etc_ro/ShellCrash
+	cp -rf $(THISDIR)/dist/* $(ROMFSDIR)/etc_ro/ShellCrash/
+	chmod +x $(ROMFSDIR)/etc_ro/ShellCrash/CrashCore
+	$(ROMFSINST) -p +x $(THISDIR)/shellcrash-service.sh /usr/bin/shellcrash-service.sh
+	ln -sf /etc_ro/ShellCrash/CrashCore $(ROMFSDIR)/usr/bin/CrashCore
+	ln -sf /usr/bin/shellcrash-service.sh $(ROMFSDIR)/usr/bin/crash
 EOF
 
-# 将 Xray 挂载进 trunk/user/Makefile
-if ! grep -q "CONFIG_FIRMWARE_INCLUDE_XRAY" "${WORK_DIR}/trunk/user/Makefile"; then
-    echo "    在 trunk/user/Makefile 中注册 Xray 编译构建单元..."
-    sed -i '/dir_\$(SHADOWSOCKS_ENABLE).*+= shadowsocks/a dir_\$(CONFIG_FIRMWARE_INCLUDE_XRAY) += xray' "${WORK_DIR}/trunk/user/Makefile"
+# 3.6 挂载到 trunk/user/Makefile
+if ! grep -q "shellcrash" "${WORK_DIR}/trunk/user/Makefile"; then
+    echo "    在 trunk/user/Makefile 中注册 ShellCrash 编译打包单元..."
+    sed -i '/dir_\$(SHADOWSOCKS_ENABLE).*+= shadowsocks/a dir_y += shellcrash' "${WORK_DIR}/trunk/user/Makefile"
 fi
 
-# 修复 dropbear Makefile 中缺少 staging 头文件/库目录导致的 configure 失败 (双重保障)
+# 4. 升级 Shadowsocks.asp 为现代全功能 ShellCrash 科学上网控制台
+echo ">>> [5/6] 升级 WebUI 科学上网页面为 ShellCrash + MetaCubeXD 可视化控制台..."
+WEB_ASP="${WORK_DIR}/trunk/user/www/n56u_ribbon_fixed/Shadowsocks.asp"
+
+cat > "${WEB_ASP}" <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+<title><#Web_Title#> - ShellCrash 科学上网控制台</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="-1">
+
+<link rel="shortcut icon" href="images/favicon.ico">
+<link rel="icon" href="images/favicon.png">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/bootstrap.min.css">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/main.css">
+<link rel="stylesheet" type="text/css" href="/bootstrap/css/engage.itoggle.css">
+
+<script type="text/javascript" src="/jquery.js"></script>
+<script type="text/javascript" src="/bootstrap/js/bootstrap.min.js"></script>
+<script type="text/javascript" src="/bootstrap/js/engage.itoggle.min.js"></script>
+<script type="text/javascript" src="/state.js"></script>
+<script type="text/javascript" src="/general.js"></script>
+<script type="text/javascript" src="/itoggle.js"></script>
+<script type="text/javascript" src="/popup.js"></script>
+<script type="text/javascript" src="/help.js"></script>
+
+<style>
+.sc-card {
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+.sc-badge-on {
+    background-color: #468847;
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+.sc-badge-off {
+    background-color: #b94a48;
+    color: #fff;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+.sub-input {
+    width: 90% !important;
+    font-family: monospace;
+    font-size: 13px;
+}
+.iframe-container {
+    width: 100%;
+    height: 700px;
+    border: 1px solid #e3e3e3;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fafafa;
+}
+</style>
+
+<script>
+var $j = jQuery.noConflict();
+
+$j(document).ready(function(){
+    init_itoggle('ss_enable');
+});
+
+function initial(){
+    show_banner(2);
+    show_menu(5,13,1);
+    show_footer();
+    check_status();
+}
+
+function check_status(){
+    $j.get('/apply.cgi?current_page=Shadowsocks.asp', function(){
+        // 自动检测端口响应状态
+        var img = new Image();
+        img.onload = function(){
+            $j('#sc_status_badge').html('<span class="sc-badge-on">● 运行中 (Mihomo Meta)</span>');
+            $j('#ui_iframe').attr('src', 'http://' + window.location.hostname + ':9999/ui');
+        };
+        img.onerror = function(){
+            $j('#sc_status_badge').html('<span class="sc-badge-off">● 已停止</span>');
+        };
+        img.src = 'http://' + window.location.hostname + ':9999/ui/favicon.ico?' + Math.random();
+    });
+}
+
+function applyRule(){
+    showLoading();
+    document.form.action_mode.value = " Apply ";
+    document.form.current_page.value = "Shadowsocks.asp";
+    document.form.next_page.value = "Shadowsocks.asp";
+    document.form.submit();
+}
+
+function updateSubNow(){
+    var url = $j('#sc_sub_url').val().trim();
+    if(!url){
+        alert("请先填入机场订阅链接！");
+        return;
+    }
+    showLoading();
+    applyRule();
+}
+
+function openFullUI(){
+    window.open('http://' + window.location.hostname + ':9999/ui', '_blank');
+}
+</script>
+</head>
+
+<body onload="initial();">
+<div id="TopBanner"></div>
+<div id="Loading" class="popup_bg"></div>
+<iframe name="hidden_frame" id="hidden_frame" src="" width="0" height="0" frameborder="0"></iframe>
+
+<form method="post" name="form" action="/apply.cgi" target="hidden_frame">
+<input type="hidden" name="action_mode" value=" Apply ">
+<input type="hidden" name="current_page" value="Shadowsocks.asp">
+<input type="hidden" name="next_page" value="Shadowsocks.asp">
+
+<div class="container-fluid">
+    <div class="row-fluid">
+        <div class="span3">
+            <div id="Menu"></div>
+        </div>
+
+        <div class="span9">
+            <div class="box well">
+                <h2>ShellCrash 科学上网控制台</h2>
+                <div class="alert alert-info">
+                    <strong>红米 AC2100 高性能专版：</strong> 已内置 Mihomo (Clash Meta) 1000MHz 软浮点核心与 MetaCubeXD 图形化控制面板。支持通用的 Clash / V2Ray / SSR / SS 订阅链接，国内流量直连、国外流量自动分流。
+                </div>
+
+                <!-- 核心控制卡片 -->
+                <div class="sc-card">
+                    <table class="table" style="margin-bottom: 0;">
+                        <tr>
+                            <th width="30%">服务运行状态</th>
+                            <td>
+                                <span id="sc_status_badge"><span class="sc-badge-off">● 检查中...</span></span>
+                                &nbsp;&nbsp;
+                                <button type="button" class="btn btn-success btn-small" onclick="openFullUI();">在新窗口打开 Web 控制面板 ↗</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>启用 ShellCrash</th>
+                            <td>
+                                <div class="main_itoggle">
+                                    <div id="ss_enable_on_of">
+                                        <input type="checkbox" id="ss_enable_fake" <% nvram_match_x("", "ss_enable", "1", "value=1 checked"); %><% nvram_match_x("", "ss_enable", "0", "value=0"); %>>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>机场订阅链接 (Subscription)</th>
+                            <td>
+                                <input type="text" id="sc_sub_url" name="sc_sub_url" class="input sub-input" placeholder="粘贴您的 Clash / V2Ray / 通用订阅链接 (http:// 或 https://)" value="<% nvram_get_x("","sc_sub_url"); %>" />
+                                <div style="margin-top: 8px;">
+                                    <button type="button" class="btn btn-primary" onclick="updateSubNow();">保存并立即拉取订阅节点</button>
+                                    <span class="help-inline" style="color: #666;">粘贴订阅后点击此按钮，路由器将自动下载节点配置并启动分流服务。</span>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- 内嵌 MetaCubeXD 仪表盘 -->
+                <div class="sc-card">
+                    <h4>可视化节点选择与测速仪表盘</h4>
+                    <p style="color: #777;">服务启动后下方自动呈现节点列表与测速界面。您也可以直接点选节点、切换分流策略：</p>
+                    <div class="iframe-container">
+                        <iframe id="ui_iframe" src="" width="100%" height="100%" frameborder="0"></iframe>
+                    </div>
+                </div>
+
+                <div style="text-align: center; margin-top: 15px;">
+                    <input class="btn btn-primary btn-large" style="width: 250px;" type="button" value="<#CTL_apply#>" onclick="applyRule()" />
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</form>
+
+<div id="Footer"></div>
+</body>
+</html>
+EOF
+
+# 5. 对接 shadowsocks.sh 生命周期
+echo ">>> [6/6] 对接 Padavan 系统后台生命周期与防火墙规则..."
+SS_SH="${WORK_DIR}/trunk/user/shadowsocks/scripts/shadowsocks.sh"
+
+cat > "${SS_SH}" <<'EOF'
+#!/bin/sh
+# 对接 ShellCrash 核心生命周期
+case "$1" in
+    start)
+        if [ "$(nvram get ss_enable)" = "1" ]; then
+            logger -st "ShellCrash" "启动 ShellCrash 核心与透明代理..."
+            /usr/bin/shellcrash-service.sh start
+        fi
+        ;;
+    stop)
+        logger -st "ShellCrash" "停止 ShellCrash 服务..."
+        /usr/bin/shellcrash-service.sh stop
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        ;;
+esac
+EOF
+chmod +x "${SS_SH}"
+
+# 修复 dropbear 构建依赖路径双保险
 if [ -f "${WORK_DIR}/trunk/user/dropbear/Makefile" ]; then
-    echo "    补全 trunk/user/dropbear/Makefile 中的 staging 依赖查找路径..."
     sed -i 's|\./configure \\|CFLAGS="\$(CFLAGS) -I\$(STAGEDIR)/include" LDFLAGS="\$(LDFLAGS) -L\$(STAGEDIR)/lib" ./configure \\|g' "${WORK_DIR}/trunk/user/dropbear/Makefile" || true
 fi
 
-echo ">>> [5/5] 红米 AC2100 定制流程执行完毕，已就绪！"
+echo ">>> 全部定制逻辑配置完毕！ShellCrash 核心、WebUI 面板与订阅管理已全部就绪！"
