@@ -87,6 +87,10 @@ if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
         cp -rf "${SC_PKG_DIR}/dist/ui/public/"* "${SC_PKG_DIR}/dist/ui/"
         rm -rf "${SC_PKG_DIR}/dist/ui/public"
     fi
+    # 注入智能自适应脚本：自动识别路由器 IP 与端口，免手动输入跳过登录页秒进后台
+    if [ -f "${SC_PKG_DIR}/dist/ui/index.html" ]; then
+        sed -i 's|<head>|<head><script>try{var h=window.location.hostname,p=window.location.port||"9999";if(window.location.search.indexOf("hostname")===-1){var s=window.location.search?"\&":"?";window.location.replace(window.location.pathname+window.location.search+s+"hostname="+h+"\&port="+p);}}catch(e){}</script>|g' "${SC_PKG_DIR}/dist/ui/index.html"
+    fi
 fi
 
 # 3.4 下载精简版离线 GeoIP 数据库 (仅约 400KB，彻底解决未联网时 can't download MMDB 致命崩溃)
@@ -188,9 +192,22 @@ update_subscription() {
     TMP_CONF="/tmp/sub_config.yaml"
     rm -f "${TMP_CONF}"
 
-    # 优先直接拉取，如果失败尝试走公共订阅转换
-    curl -kfsSL --retry 2 --connect-timeout 8 -o "${TMP_CONF}" "${SUB_URL}" || \
-    curl -kfsSL --retry 2 --connect-timeout 10 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')" || true
+    # 优先携带 Clash User-Agent 直接拉取 (绝大多数机场检测到 clash 请求头会自动下发完整 YAML 节点配置)
+    curl -kfsSL -A "clash" --retry 2 --connect-timeout 10 -o "${TMP_CONF}" "${SUB_URL}" || true
+
+    # 如果返回的内容不是 YAML 节点配置 (例如机场下发了通用 base64 文本)，追加 flag=clash 重试
+    if [ ! -s "${TMP_CONF}" ] || ! grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
+        case "${SUB_URL}" in
+            *\?*) FLAG_URL="${SUB_URL}&flag=clash" ;;
+            *) FLAG_URL="${SUB_URL}?flag=clash" ;;
+        esac
+        curl -kfsSL -A "clash" --retry 2 --connect-timeout 10 -o "${TMP_CONF}" "${FLAG_URL}" || true
+    fi
+
+    # 如果仍未获取到，尝试走公共订阅转换
+    if [ ! -s "${TMP_CONF}" ] || ! grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
+        curl -kfsSL --retry 2 --connect-timeout 10 -o "${TMP_CONF}" "https://api.v1.mk/sub?target=clash&url=$(echo -n ${SUB_URL} | sed 's/ /%20/g')" || true
+    fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
@@ -444,7 +461,8 @@ function checkCrashStatus(){
 }
 
 function openWebUI(){
-    window.open('http://' + window.location.hostname + ':9999/ui', '_blank');
+    var host = window.location.hostname;
+    window.open('http://' + host + ':9999/ui/?hostname=' + host + '&port=9999', '_blank');
 }
 
 function applyRule(){
