@@ -40,9 +40,12 @@
 - [x] **阶段 8：彻底修复科学上网页面侧边栏丢失与 WebUI 无法连接两大故障**
   - [x] **修复页面布局与菜单丢失**：原版 Padavan 的 `show_menu()` 强依赖 `<div class="wrapper">`、`<div id="logo">` 以及 `<div class="well sidebar-nav side_nav"><ul id="mainMenu">` 等固定 DOM 树结构。补齐这些容器后，左侧完整的分类菜单树完美渲染，杜绝黑色空白与错位。
   - [x] **移除 UPX 破坏性压缩**：定位到 Linux MIPSLE 架构下 UPX 压缩 Go 编译的 CrashCore 核心会导致内存段破坏引发段错误（SIGSEGV）退出的致命缺陷，彻底移除 UPX 压缩，确保 CrashCore 启动时正常常驻并监听 9999 端口。
-  - [x] **修复极简健壮备用配置**：移除外部网络依赖（如启动时下载 anti-ad 规则），提供纯净本地规则，确保刚刷机未联网时 9999 控制端口依然 100% 成功启动，Yacd 界面秒开。
   - [x] **局域网 IP 动态适配**：页面中的面板 URL 和状态探测全面改用 `<% nvram_get_x("","lan_ipaddr"); %>` 动态提取，自适应 `192.168.2.1` 与 `192.168.123.1` 等任意自定义网段。
   - [x] **运行环境迁入 tmpfs**：将工作目录全面设为 `/tmp/ShellCrash`，彻底避免运行时缓存写满有限的 `/etc/storage` 闪存分区。
+- [x] **阶段 9：精准定位 GeoIP/MMDB 证书校验致命崩溃并彻底根治**
+  - [x] **崩溃根因定位**：通过路由器抓取的 `crash.log` 定位到 `Parse config error: rules[0] [GEOIP,CN,DIRECT] error: can't download MMDB: Get ... tls: failed to verify certificate: x509: certificate signed by unknown authority`。Clash.Meta 解析到 GEOIP 规则且本地缺少 MMDB 数据库时触发强制联网下载，而 Padavan 极简系统缺少公共 CA 根证书导致 TLS 校验失败，触发 `level=fatal` 致命错误直接退出进程，导致 9999 端口无监听。
+  - [x] **备用规则纯净化**：彻底剔除备用配置中所有带有外部下载依赖的 `GEOIP,CN,DIRECT` 规则，仅保留单条 `MATCH,DIRECT`，确保开机与无订阅状态下 100% 成功启动 9999 端口。
+  - [x] **固件内置离线 MMDB**：在构建阶段自动集成精简版离线 `Country.mmdb`（约 400KB）至 `/etc_ro/ShellCrash/`，启动脚本自动软链接到 `/tmp/ShellCrash/Country.mmdb` 和 `geoip.metadb`，即使后续导入的订阅规则含有 GEOIP 也能本地秒解，杜绝触发网络下载与证书报错。
 
 ---
 

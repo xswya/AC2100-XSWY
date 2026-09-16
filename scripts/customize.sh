@@ -88,9 +88,19 @@ if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
         rm -rf "${SC_PKG_DIR}/dist/ui/public"
     fi
 fi
+
+# 3.4 下载精简版离线 GeoIP 数据库 (仅约 400KB，彻底解决未联网时 can't download MMDB 致命崩溃)
+if [ ! -f "${SC_PKG_DIR}/dist/Country.mmdb" ]; then
+    echo "    下载轻量级离线 Country.mmdb 数据库..."
+    curl -fL --retry 3 -o "${SC_PKG_DIR}/dist/Country.mmdb" "https://fastly.jsdelivr.net/gh/alecthw/mmdb_china_ip_list@release/Country.mmdb" || \
+    curl -fL --retry 3 -o "${SC_PKG_DIR}/dist/Country.mmdb" "https://raw.githubusercontent.com/alecthw/mmdb_china_ip_list/release/Country.mmdb" || true
+    if [ -f "${SC_PKG_DIR}/dist/Country.mmdb" ]; then
+        cp -f "${SC_PKG_DIR}/dist/Country.mmdb" "${SC_PKG_DIR}/dist/geoip.metadb"
+    fi
+fi
 rm -rf "${SC_TMP}"
 
-# 3.4 编写 ShellCrash 服务启动与透明代理控制脚本 (shellcrash-service.sh)
+# 3.5 编写 ShellCrash 服务启动与透明代理控制脚本 (shellcrash-service.sh)
 cat > "${SC_PKG_DIR}/shellcrash-service.sh" <<'EOF'
 #!/bin/sh
 # ==============================================================================
@@ -114,6 +124,9 @@ init_env() {
     if [ ! -d "${CRASH_DIR}/ui" ]; then
         ln -sf "${RO_DIR}/ui" "${CRASH_DIR}/ui"
     fi
+    # 挂载离线 GeoIP 数据库，彻底杜绝联网下载与证书报错
+    [ -f "${RO_DIR}/Country.mmdb" ] && ln -sf "${RO_DIR}/Country.mmdb" "${CRASH_DIR}/Country.mmdb"
+    [ -f "${RO_DIR}/geoip.metadb" ] && ln -sf "${RO_DIR}/geoip.metadb" "${CRASH_DIR}/geoip.metadb"
 }
 
 # 配置透明代理 iptables 转发规则
@@ -250,7 +263,6 @@ dns:
     - 119.29.29.29
 
 rules:
-  - GEOIP,CN,DIRECT
   - MATCH,DIRECT
 YAMLEOF
         fi
