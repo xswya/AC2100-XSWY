@@ -232,6 +232,10 @@ update_subscription() {
         sed -i '/^allow-lan:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^mode:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^log-level:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^mixed-port:/d' "${TMP_CONF}" 2>/dev/null || true
+        sed -i '/^bind-address:/d' "${TMP_CONF}" 2>/dev/null || true
+        # 删除原有 dns: 整段 (顶层 dns: 到下一个顶层 key 之间的所有行)，由我们统一注入带 fallback 的完整 DNS
+        sed -i '/^dns:/,/^[^ ]/{/^dns:/d;/^  /d;/^$/d;}' "${TMP_CONF}" 2>/dev/null || true
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
@@ -243,6 +247,30 @@ secret: ''
 allow-lan: true
 mode: rule
 log-level: info
+
+dns:
+  enable: true
+  listen: 0.0.0.0:5353
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "router.asus.com"
+    - "my.router"
+  nameserver:
+    - 127.0.0.1:6053
+    - 223.5.5.5
+    - 119.29.29.29
+  fallback:
+    - tls://8.8.8.8:853
+    - tls://1.1.1.1:853
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
 YAMLEOF
         cp -f "${TMP_CONF}" "${CONF_FILE}"
         rm -f "${TMP_CONF}"
@@ -300,6 +328,14 @@ dns:
     - 127.0.0.1:6053
     - 223.5.5.5
     - 119.29.29.29
+  fallback:
+    - tls://8.8.8.8:853
+    - tls://1.1.1.1:853
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
 
 rules:
   - MATCH,DIRECT
