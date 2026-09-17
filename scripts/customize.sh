@@ -152,6 +152,10 @@ start_firewall() {
     echo "配置透明代理 iptables 转发规则..."
     iptables -t nat -N CLASH 2>/dev/null || iptables -t nat -F CLASH
 
+    # 关键修复1: 排除路由器自身的管理IP (避免WebUI无法访问)
+    LAN_IP="$(nvram get lan_ipaddr || echo 192.168.123.1)"
+    iptables -t nat -A CLASH -d "${LAN_IP}" -j RETURN
+
     # 保留私网与局域网段
     iptables -t nat -A CLASH -d 0.0.0.0/8 -j RETURN
     iptables -t nat -A CLASH -d 10.0.0.0/8 -j RETURN
@@ -178,6 +182,15 @@ start_firewall() {
     iptables -t nat -A CLASH -p tcp -j REDIRECT --to-ports ${PORT_REDIR}
     iptables -t nat -D PREROUTING -p tcp -j CLASH 2>/dev/null || true
     iptables -t nat -I PREROUTING -p tcp -j CLASH
+
+    # 关键修复2: 标记路由器自身发起的流量并跳过代理 (避免路由器自己的DNS/NTP请求被劫持)
+    iptables -t mangle -N CLASH_MARK 2>/dev/null || iptables -t mangle -F CLASH_MARK
+    iptables -t mangle -A CLASH_MARK -j MARK --set-mark 0xff
+    iptables -t mangle -D OUTPUT -j CLASH_MARK 2>/dev/null || true
+    iptables -t mangle -A OUTPUT -j CLASH_MARK
+
+    # 在nat表中也要跳过标记的流量
+    iptables -t nat -I CLASH 1 -m mark --mark 0xff -j RETURN
 }
 
 # 清理透明代理 iptables 规则
@@ -186,6 +199,9 @@ stop_firewall() {
     iptables -t nat -D PREROUTING -p tcp -j CLASH 2>/dev/null || true
     iptables -t nat -F CLASH 2>/dev/null || true
     iptables -t nat -X CLASH 2>/dev/null || true
+    iptables -t mangle -D OUTPUT -j CLASH_MARK 2>/dev/null || true
+    iptables -t mangle -F CLASH_MARK 2>/dev/null || true
+    iptables -t mangle -X CLASH_MARK 2>/dev/null || true
 }
 
 # 拉取订阅配置
