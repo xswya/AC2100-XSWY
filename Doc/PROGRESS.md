@@ -53,8 +53,9 @@
   - [x] **OpenSSH 开箱即用**：在 `post_wan_script.sh` 自启脚本中注入 OpenSSH 自愈逻辑——新固件首次开机自动检测 `/etc/storage/openssh/sshd_config` 是否存在，缺失时自动创建配置文件、生成 RSA/ED25519 主机密钥、持久化到闪存并重启 sshd，彻底解决 `Connection reset by peer` 无法 SSH 登录的问题。
 - [x] **阶段 11：注入 fallback DNS 解析海外节点 + 排除 Fake-IP 保留网段根治双重代理死锁**
   - [x] **注入 fallback 加密 DNS**：在 Mihomo 配置模板与备份配置中注入海外加密 DNS（Google/Cloudflare DoT）与 fallback-filter 分流机制，彻底解决海外机场节点域名因国内上游 DNS 无法解析导致代理完全失效的隐患。
-  - [x] **排除 `198.18.0.0/15` Fake-IP 网段**：在透明代理 iptables 规则中将 `198.18.0.0/15` 网段加入保留地址排除清单。当局域网电脑/手机自身开启 Clash/TUN 等客户端代理时，路由器不再误捕获其内部虚拟 Fake-IP，彻底根治双重代理（套娃）引起的连接卡死；设备关闭自身客户端代理时，依然 100% 自动通过路由器透明翻墙。
-  - [x] **支持局域网设备直连白名单**：支持读取 `clash_bypass_ips` NVRAM 变量，允许用户根据需要指定特定内网 IP 完全直连绕过路由器代理。
+- [x] **阶段 12：补齐 proxy-server-nameserver 节点专用解析 + 开机动态扩容 /tmp 至 64M**
+  - [x] **节点域名秒级解析（proxy-server-nameserver）**：Clash.Meta 底层对于代理节点服务器域名专用解析参数为 `proxy-server-nameserver`。正式注入阿里公共 DNS、腾讯公共 DNS 以及阿里/腾讯 DoH 加密 DNS，剔除易超时的未就绪端口，彻底根除节点域名 `dns resolve failed`。
+  - [x] **根治 WebUI 固件升级内存爆仓（/tmp 扩容 64M）**：在系统自启初始化脚本 `post_wan_init.sh` 中注入 `mount -o remount,size=64M /tmp`，将 Padavan 默认仅 24M 的 `/tmp` 挂载点在开机时安全扩容至 64M（设备物理拥有 128MB RAM），彻底杜绝 WebUI 上传 18MB+ 大体积固件时提示 `Please check free space in /tmp!`。
 
 ---
 

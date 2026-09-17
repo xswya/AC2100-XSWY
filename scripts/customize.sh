@@ -266,13 +266,21 @@ dns:
     - "*.local"
     - "router.asus.com"
     - "my.router"
-  nameserver:
-    - 127.0.0.1:6053
+  default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
   fallback:
     - tls://8.8.8.8:853
     - tls://1.1.1.1:853
+    - https://dns.google/dns-query
   fallback-filter:
     geoip: true
     geoip-code: CN
@@ -331,13 +339,21 @@ dns:
     - "*.local"
     - "router.asus.com"
     - "my.router"
-  nameserver:
-    - 127.0.0.1:6053
+  default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
   fallback:
     - tls://8.8.8.8:853
     - tls://1.1.1.1:853
+    - https://dns.google/dns-query
   fallback-filter:
     geoip: true
     geoip-code: CN
@@ -763,6 +779,9 @@ cat > "${SC_PKG_DIR}/post_wan_init.sh" <<'INITEOF'
 sysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null || true
 sysctl -w net.ipv4.tcp_fastopen=3 2>/dev/null || true
 sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null || true
+
+### 动态扩容 /tmp 分区至 64M (红米 AC2100 有 128MB RAM，彻底杜绝 WebUI 升级固件报空间不足)
+mount -o remount,size=64M /tmp 2>/dev/null || true
 
 ### 启动 SmartDNS DNS 加速服务
 [ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &
