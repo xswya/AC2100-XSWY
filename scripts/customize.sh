@@ -875,10 +875,27 @@ chmod +x "${SC_PKG_DIR}/post_wan_init.sh"
 STORAGE_SH="${WORK_DIR}/trunk/user/scripts/mtd_storage.sh"
 if [ -f "${STORAGE_SH}" ]; then
     if ! grep -q "post_wan_init.sh" "${STORAGE_SH}"; then
-        # 在 post_wan_script.sh 的生成位置注入调用
-        sed -i '/cat > "$script_postw" <<EOF/a\
-[ -x /usr/bin/post_wan_init.sh ] \&\& /usr/bin/post_wan_init.sh' "${STORAGE_SH}" 2>/dev/null || \
-        awk '/cat > "\$script_postw" <<EOF/{print; print "[ -x /usr/bin/post_wan_init.sh ] \\&\\& /usr/bin/post_wan_init.sh"; next}1' "${STORAGE_SH}" > "${STORAGE_SH}.tmp" && mv -f "${STORAGE_SH}.tmp" "${STORAGE_SH}"
+        # 在 post_wan_script.sh 的 shebang 后注入调用
+        if awk '
+        {
+            print
+            if (in_postw && $0 == "#!/bin/sh") {
+                print "[ -x /usr/bin/post_wan_init.sh ] && /usr/bin/post_wan_init.sh"
+                injected = 1
+                in_postw = 0
+            }
+            if ($0 ~ /^[[:space:]]*cat > "\$script_postw" <<EOF[[:space:]]*$/) {
+                in_postw = 1
+            }
+        }
+        END { if (!injected) exit 1 }
+        ' "${STORAGE_SH}" > "${STORAGE_SH}.tmp"; then
+            mv -f "${STORAGE_SH}.tmp" "${STORAGE_SH}"
+        else
+            rm -f "${STORAGE_SH}.tmp"
+            echo "错误: 无法定位 mtd_storage.sh 中的 post_wan_script.sh 模板" >&2
+            exit 1
+        fi
         echo "    已将 post_wan_init.sh 调用注入到 mtd_storage.sh"
     fi
 fi
