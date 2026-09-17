@@ -670,7 +670,7 @@ function checkCrashStatus(){
         }
     }, 3000);
     // 使用 Yacd 图标作为健康检查；JSON /version 不能作为 Image 加载。
-    img.src = 'http://' + host + ':9999/ui/assets/yacd.ico?_t=' + Date.now();
+    img.src = 'http://' + host + ':9999/ui/apple-touch-icon-precomposed.png?_t=' + Date.now();
 }
 
 function openWebUI(){
