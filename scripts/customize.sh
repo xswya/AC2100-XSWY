@@ -293,8 +293,8 @@ update_subscription() {
 
         # 在 proxies 段内处理节点
         in_proxies {
-            # 节点开始标记 (支持 - name: 和 - { name: 两种常见 YAML 格式)
-            if (/^  - /) {
+            # 节点开始标记 (兼容 2/4 空格缩进以及紧凑 YAML 格式)
+            if (/^[[:space:]]*-[[:space:]]+/) {
                 flush_proxy()
                 node_buf = $0 "\n"
                 in_node = 1
@@ -306,8 +306,8 @@ update_subscription() {
                 }
                 next
             }
-            # 节点内容 (以空格开头)
-            if (in_node && /^    /) {
+            # 节点的后续内容全部缓冲，直到下一个列表项或顶层 key
+            if (in_node) {
                 node_buf = node_buf $0 "\n"
                 if ($0 ~ /防失联|官网|订阅|网址|sdfabu|续费|流量|套餐/) {
                     skip_node = 1
@@ -679,6 +679,13 @@ function openWebUI(){
 }
 
 function applyRule(){
+    var enabled = document.getElementById('ss_enable_fake');
+    var enabledValue = document.getElementById('ss_enable_1');
+    var disabledValue = document.getElementById('ss_enable_0');
+    if (enabled && enabledValue && disabledValue) {
+        enabledValue.checked = enabled.checked;
+        disabledValue.checked = !enabled.checked;
+    }
     showLoading();
     document.form.action_mode.value = " Restart ";
     document.form.current_page.value = "Shadowsocks.asp";
@@ -994,8 +1001,12 @@ cat > "${SS_SH}" <<'EOF'
 # ==============================================================================
 case "$1" in
     start)
-        # 优先确保 SmartDNS 就绪
-        [ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &
+        # 从系统服务必经路径执行初始化，不依赖 /etc/storage 中的用户脚本是否存在
+        if [ -x /usr/bin/post_wan_init.sh ]; then
+            /usr/bin/post_wan_init.sh &
+        elif [ -x /usr/bin/smartdns_start.sh ]; then
+            /usr/bin/smartdns_start.sh start &
+        fi
         if [ "$(nvram get ss_enable)" = "1" ]; then
             logger -st "ShellCrash" "启动 ShellCrash 核心与透明代理..."
             /usr/bin/shellcrash-service.sh start
