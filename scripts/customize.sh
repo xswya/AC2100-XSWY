@@ -159,8 +159,15 @@ start_firewall() {
     iptables -t nat -A CLASH -d 169.254.0.0/16 -j RETURN
     iptables -t nat -A CLASH -d 172.16.0.0/12 -j RETURN
     iptables -t nat -A CLASH -d 192.168.0.0/16 -j RETURN
+    # 排除客户端 Fake-IP 网段 (198.18.0.0/15)，完美兼容局域网设备自身开启代理客户端，杜绝双重代理死锁
+    iptables -t nat -A CLASH -d 198.18.0.0/15 -j RETURN
     iptables -t nat -A CLASH -d 224.0.0.0/4 -j RETURN
     iptables -t nat -A CLASH -d 240.0.0.0/4 -j RETURN
+
+    # 绕过局域网指定白名单设备 (支持 nvram clash_bypass_ips 直连)
+    for _bip in $(nvram get clash_bypass_ips 2>/dev/null); do
+        [ -n "${_bip}" ] && iptables -t nat -A CLASH -s "${_bip}" -j RETURN
+    done
 
     # 绕过国内 IPSet (如果有)
     if ipset list chnroute >/dev/null 2>&1; then

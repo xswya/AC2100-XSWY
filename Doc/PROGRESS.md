@@ -51,6 +51,10 @@
   - [x] **YAML 顶层键去重**：订阅配置注入前，主动扫描并剔除机场源配置中已存在的 `allow-lan`、`mode`、`log-level` 等顶层字段，彻底杜绝 `mapping key already defined` 致命解析崩溃。
   - [x] **Yacd 免登录直达**：在构建阶段用 Python Heredoc 向 Yacd `index.html` 注入自适应 JS 脚本，自动补齐路由器 IP 与端口参数，用户打开面板后零手动输入直达后台。同时修复原 sed 注入因 JavaScript 特殊字符引发的 `unknown option to 's'` 构建报错。
   - [x] **OpenSSH 开箱即用**：在 `post_wan_script.sh` 自启脚本中注入 OpenSSH 自愈逻辑——新固件首次开机自动检测 `/etc/storage/openssh/sshd_config` 是否存在，缺失时自动创建配置文件、生成 RSA/ED25519 主机密钥、持久化到闪存并重启 sshd，彻底解决 `Connection reset by peer` 无法 SSH 登录的问题。
+- [x] **阶段 11：注入 fallback DNS 解析海外节点 + 排除 Fake-IP 保留网段根治双重代理死锁**
+  - [x] **注入 fallback 加密 DNS**：在 Mihomo 配置模板与备份配置中注入海外加密 DNS（Google/Cloudflare DoT）与 fallback-filter 分流机制，彻底解决海外机场节点域名因国内上游 DNS 无法解析导致代理完全失效的隐患。
+  - [x] **排除 `198.18.0.0/15` Fake-IP 网段**：在透明代理 iptables 规则中将 `198.18.0.0/15` 网段加入保留地址排除清单。当局域网电脑/手机自身开启 Clash/TUN 等客户端代理时，路由器不再误捕获其内部虚拟 Fake-IP，彻底根治双重代理（套娃）引起的连接卡死；设备关闭自身客户端代理时，依然 100% 自动通过路由器透明翻墙。
+  - [x] **支持局域网设备直连白名单**：支持读取 `clash_bypass_ips` NVRAM 变量，允许用户根据需要指定特定内网 IP 完全直连绕过路由器代理。
 
 ---
 
