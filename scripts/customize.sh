@@ -125,6 +125,14 @@ LOG_FILE="${CRASH_DIR}/crash.log"
 PORT_REDIR=7892
 PORT_UI=9999
 
+core_is_ready() {
+    [ -f "${PID_FILE}" ] || return 1
+    CORE_PID="$(cat "${PID_FILE}" 2>/dev/null)"
+    [ -n "${CORE_PID}" ] || return 1
+    kill -0 "${CORE_PID}" 2>/dev/null || return 1
+    curl -fsS --max-time 2 "http://127.0.0.1:${PORT_UI}/version" >/dev/null 2>&1
+}
+
 # 初始化运行目录 (RAM 快速环境)
 init_env() {
     mkdir -p "${CRASH_DIR}"
@@ -236,25 +244,58 @@ update_subscription() {
     fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
-        # 使用 awk 过滤广告节点 (兼容无 Python 环境)
+        # 使用 awk 过滤广告节点并清理代理组引用 (兼容无 Python 环境)
         awk '
         BEGIN { in_proxies=0; in_node=0; skip_node=0; node_buf="" }
 
+        # 从代理组等行中删除被过滤节点的单引号引用，同时保留 YAML 的逗号和括号结构。
+        function clean_refs(line,    offset,start,token,before,after) {
+            offset = 1
+            while (offset <= length(line) && (start = match(substr(line, offset), /\047[^\047]*\047/)) > 0) {
+                start += offset - 1
+                token = substr(line, start, RLENGTH)
+                if (token ~ /防失联|官网|订阅|网址|sdfabu|续费|流量|套餐/) {
+                    before = substr(line, 1, start - 1)
+                    after = substr(line, start + RLENGTH)
+                    if (after ~ /^[[:space:]]*,/) {
+                        sub(/^[[:space:]]*,[[:space:]]*/, "", after)
+                    } else {
+                        sub(/,[[:space:]]*$/, "", before)
+                    }
+                    line = before after
+                    offset = (start > 1) ? start - 1 : 1
+                } else {
+                    offset = start + RLENGTH
+                }
+            }
+            return line
+        }
+
+        function flush_proxy() {
+            if (in_node && !skip_node && node_buf != "") {
+                printf "%s", node_buf
+            }
+            node_buf = ""
+            in_node = 0
+            skip_node = 0
+        }
+
         # 检测进入 proxies 段
-        /^proxies:/ { in_proxies=1; print; next }
+        /^proxies:[[:space:]]*$/ { in_proxies=1; print; next }
 
         # 检测离开 proxies 段 (顶层 key)
-        /^[^ ]/ && in_proxies && !/^  / { in_proxies=0 }
+        /^[^[:space:]]/ && in_proxies {
+            flush_proxy()
+            in_proxies=0
+            print clean_refs($0)
+            next
+        }
 
         # 在 proxies 段内处理节点
         in_proxies {
-            # 节点开始标记 (- name:)
-            if (/^  - name:/) {
-                # 先输出上一个节点
-                if (in_node && !skip_node && node_buf != "") {
-                    printf "%s", node_buf
-                }
-                # 重置缓冲
+            # 节点开始标记 (支持 - name: 和 - { name: 两种常见 YAML 格式)
+            if (/^  - /) {
+                flush_proxy()
                 node_buf = $0 "\n"
                 in_node = 1
                 # 检查是否包含广告关键词
@@ -268,18 +309,18 @@ update_subscription() {
             # 节点内容 (以空格开头)
             if (in_node && /^    /) {
                 node_buf = node_buf $0 "\n"
+                if ($0 ~ /防失联|官网|订阅|网址|sdfabu|续费|流量|套餐/) {
+                    skip_node = 1
+                }
                 next
             }
         }
 
-        # 非 proxies 段直接输出
-        !in_proxies { print }
+        # 非 proxies 段直接输出，并清理代理组对广告节点的引用
+        !in_proxies { print clean_refs($0) }
 
         END {
-            # 输出最后一个节点
-            if (in_node && !skip_node && node_buf != "") {
-                printf "%s", node_buf
-            }
+            flush_proxy()
         }
         ' "${TMP_CONF}" > "${TMP_CONF}.filtered" && mv -f "${TMP_CONF}.filtered" "${TMP_CONF}"
 
@@ -436,14 +477,24 @@ YAMLEOF
         echo $! > "${PID_FILE}"
         sleep 2
 
-        # 检测核心是否正常存活
-        if kill -0 $(cat "${PID_FILE}" 2>/dev/null) 2>/dev/null; then
+        # 等待控制端口真正就绪，避免配置解析稍后失败却提前报告启动成功
+        CORE_READY=0
+        for _ in 1 2 3 4 5; do
+            if core_is_ready; then
+                CORE_READY=1
+                break
+            fi
+            sleep 1
+        done
+        if [ "${CORE_READY}" = "1" ]; then
             start_firewall
             LAN_IP="$(nvram get lan_ipaddr || echo 192.168.2.1)"
             logger -st "ShellCrash" "ShellCrash 核心启动成功！Web 控制面板: http://${LAN_IP}:${PORT_UI}/ui"
         else
             logger -st "ShellCrash" "警告: CrashCore 核心启动异常退出！最近日志:"
             tail -n 10 "${LOG_FILE}" 2>/dev/null | while read line; do logger -st "ShellCrash" "$line"; done
+            kill "$(cat "${PID_FILE}" 2>/dev/null)" 2>/dev/null || true
+            rm -f "${PID_FILE}"
         fi
         ;;
     stop)
@@ -466,7 +517,7 @@ YAMLEOF
         $0 restart
         ;;
     status)
-        if [ -f "${PID_FILE}" ] && kill -0 $(cat "${PID_FILE}") 2>/dev/null; then
+        if core_is_ready; then
             echo "1"
         else
             echo "0"
@@ -594,12 +645,23 @@ function initial(){
 
 function checkCrashStatus(){
     var host = window.location.hostname;
+    var enabled = '<% nvram_get_x("", "ss_enable"); %>' === '1';
+    if (!enabled) {
+        $j('#crash_status').html('<span class="label label-default" style="padding: 4px 8px;">● 服务未启用</span>');
+        return;
+    }
+
     var done = false;
     var img = new Image();
-    img.onload = img.onerror = function(){
+    img.onload = function(){
         if (done) return;
         done = true;
         $j('#crash_status').html('<span class="label label-success" style="padding: 4px 8px;">● 核心运行中 (Mihomo/Meta)</span>');
+    };
+    img.onerror = function(){
+        if (done) return;
+        done = true;
+        $j('#crash_status').html('<span class="label label-danger" style="padding: 4px 8px;">● 核心未运行</span>');
     };
     setTimeout(function(){
         if (!done) {
@@ -607,7 +669,8 @@ function checkCrashStatus(){
             $j('#crash_status').html('<span class="label label-warning" style="padding: 4px 8px;">● 未就绪 / 启动中</span>');
         }
     }, 3000);
-    img.src = 'http://' + host + ':9999/version?_t=' + Date.now();
+    // 使用 Yacd 图标作为健康检查；JSON /version 不能作为 Image 加载。
+    img.src = 'http://' + host + ':9999/ui/assets/yacd.ico?_t=' + Date.now();
 }
 
 function openWebUI(){
@@ -844,6 +907,21 @@ mount -o remount,size=64M /tmp 2>/dev/null || true
 
 ### 启动 SmartDNS DNS 加速服务
 [ -x /usr/bin/smartdns_start.sh ] && /usr/bin/smartdns_start.sh start &
+
+### 确保 dnsmasq 用户配置目录存在 (新刷固件时 watchdog 会直接引用此文件)
+DNSMASQ_DIR="/etc/storage/dnsmasq"
+DNSMASQ_CONF="${DNSMASQ_DIR}/dnsmasq.conf"
+if [ ! -f "${DNSMASQ_CONF}" ]; then
+    mkdir -p "${DNSMASQ_DIR}"
+    cat > "${DNSMASQ_CONF}" <<'DNEOF'
+# Custom user conf file for dnsmasq
+# Please add needed params only!
+
+### Web Proxy Automatic Discovery (WPAD)
+dhcp-option=252,"\n"
+DNEOF
+    chmod 644 "${DNSMASQ_CONF}"
+fi
 
 ### 自动初始化 OpenSSH 环境与主机密钥 (保证新固件开箱即用)
 if [ ! -f /etc/storage/openssh/sshd_config ]; then
