@@ -89,21 +89,10 @@ if [ ! -d "${SC_PKG_DIR}/dist/ui" ]; then
     fi
     # 注入智能自适应脚本：自动识别路由器 IP 与端口，免手动输入跳过登录页秒进后台
     if [ -f "${SC_PKG_DIR}/dist/ui/index.html" ]; then
-        python3 - "${SC_PKG_DIR}/dist/ui/index.html" <<'PYEOF' || true
-import sys
-if len(sys.argv) > 1:
-    path = sys.argv[1]
-    try:
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            html = f.read()
-        patch = '<head><script>try{var h=window.location.hostname,p=window.location.port||"9999";if(window.location.search.indexOf("hostname")===-1){var s=window.location.search?"&":"?";window.location.replace(window.location.pathname+window.location.search+s+"hostname="+h+"&port="+p);}}catch(e){}</script>'
-        if '<head>' in html and 'hostname=' not in html:
-            html = html.replace('<head>', patch, 1)
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(html)
-    except Exception:
-        pass
-PYEOF
+        # 使用 sed 注入 JavaScript (兼容无 Python 环境)
+        if ! grep -q 'hostname=' "${SC_PKG_DIR}/dist/ui/index.html"; then
+            sed -i '/<head>/a\<script>try{var h=window.location.hostname,p=window.location.port||"9999";if(window.location.search.indexOf("hostname")===-1){var s=window.location.search?"&":"?";window.location.replace(window.location.pathname+window.location.search+s+"hostname="+h+"&port="+p);}}catch(e){}<\/script>' "${SC_PKG_DIR}/dist/ui/index.html" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -247,43 +236,54 @@ update_subscription() {
     fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
-        # 过滤掉广告节点 (名称中包含"防失联"、"官网"、"订阅"等关键词的节点)
-        python3 - "${TMP_CONF}" <<'PYEOF' || true
-import sys, yaml, re
-if len(sys.argv) > 1:
-    try:
-        with open(sys.argv[1], 'r', encoding='utf-8') as f:
-            conf = yaml.safe_load(f)
+        # 使用 awk 过滤广告节点 (兼容无 Python 环境)
+        awk '
+        BEGIN { in_proxies=0; in_node=0; skip_node=0; node_buf="" }
 
-        # 广告节点关键词
-        ad_keywords = ['防失联', '官网', '订阅', '网址', 'sdfabu', '续费', '流量', '套餐']
+        # 检测进入 proxies 段
+        /^proxies:/ { in_proxies=1; print; next }
 
-        # 过滤 proxies 列表
-        if 'proxies' in conf and isinstance(conf['proxies'], list):
-            original_count = len(conf['proxies'])
-            conf['proxies'] = [
-                p for p in conf['proxies']
-                if not any(kw in p.get('name', '') for kw in ad_keywords)
-            ]
-            filtered_count = original_count - len(conf['proxies'])
-            if filtered_count > 0:
-                print(f'已过滤 {filtered_count} 个广告节点', file=sys.stderr)
+        # 检测离开 proxies 段 (顶层 key)
+        /^[^ ]/ && in_proxies && !/^  / { in_proxies=0 }
 
-        # 更新 proxy-groups 中的节点引用
-        if 'proxy-groups' in conf:
-            valid_proxy_names = {p['name'] for p in conf.get('proxies', [])}
-            for group in conf['proxy-groups']:
-                if 'proxies' in group and isinstance(group['proxies'], list):
-                    group['proxies'] = [
-                        p for p in group['proxies']
-                        if p in valid_proxy_names or p in ['DIRECT', 'REJECT']
-                    ]
+        # 在 proxies 段内处理节点
+        in_proxies {
+            # 节点开始标记 (- name:)
+            if (/^  - name:/) {
+                # 先输出上一个节点
+                if (in_node && !skip_node && node_buf != "") {
+                    printf "%s", node_buf
+                }
+                # 重置缓冲
+                node_buf = $0 "\n"
+                in_node = 1
+                # 检查是否包含广告关键词
+                if (/防失联|官网|订阅|网址|sdfabu|续费|流量|套餐/) {
+                    skip_node = 1
+                } else {
+                    skip_node = 0
+                }
+                next
+            }
+            # 节点内容 (以空格开头)
+            if (in_node && /^    /) {
+                node_buf = node_buf $0 "\n"
+                next
+            }
+        }
 
-        with open(sys.argv[1], 'w', encoding='utf-8') as f:
-            yaml.dump(conf, f, allow_unicode=True)
-    except Exception as e:
-        print(f'过滤节点失败: {e}', file=sys.stderr)
-PYEOF
+        # 非 proxies 段直接输出
+        !in_proxies { print }
+
+        END {
+            # 输出最后一个节点
+            if (in_node && !skip_node && node_buf != "") {
+                printf "%s", node_buf
+            }
+        }
+        ' "${TMP_CONF}" > "${TMP_CONF}.filtered" && mv -f "${TMP_CONF}.filtered" "${TMP_CONF}"
+
+        echo "    已过滤广告节点 (防失联/官网/订阅等关键词)" >&2
 
         # 仅删除顶层(无前导空格)的重复 key，保护嵌套在 proxies 节点中的 mode:/secret: 等字段不被误伤
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
@@ -295,8 +295,13 @@ PYEOF
         sed -i '/^log-level:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^mixed-port:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^bind-address:/d' "${TMP_CONF}" 2>/dev/null || true
-        # 删除原有 dns: 整段 (顶层 dns: 到下一个顶层 key 之间的所有行)，由我们统一注入带 fallback 的完整 DNS
-        sed -i '/^dns:/,/^[^ ]/{/^dns:/d;/^  /d;/^$/d;}' "${TMP_CONF}" 2>/dev/null || true
+        # 删除原有 dns: 整段 (严格匹配顶层 dns: 到下一个顶层 key)
+        awk '
+        BEGIN { in_dns=0 }
+        /^dns:/ { in_dns=1; next }
+        /^[a-z]/ && in_dns { in_dns=0 }
+        !in_dns { print }
+        ' "${TMP_CONF}" > "${TMP_CONF}.nodns" && mv -f "${TMP_CONF}.nodns" "${TMP_CONF}"
 
         cat >> "${TMP_CONF}" <<YAMLEOF
 
@@ -870,7 +875,10 @@ chmod +x "${SC_PKG_DIR}/post_wan_init.sh"
 STORAGE_SH="${WORK_DIR}/trunk/user/scripts/mtd_storage.sh"
 if [ -f "${STORAGE_SH}" ]; then
     if ! grep -q "post_wan_init.sh" "${STORAGE_SH}"; then
-        sed -i '/script_postw.*post_wan_script.sh/!b;n;c\	if [ ! -f "$script_postw" ] ; then\n\t\tcat > "$script_postw" <<EOF\n#!/bin/sh\n[ -x /usr/bin/post_wan_init.sh ] \&\& /usr/bin/post_wan_init.sh\n' "${STORAGE_SH}" || true
+        # 在 post_wan_script.sh 的生成位置注入调用
+        sed -i '/cat > "$script_postw" <<EOF/a\
+[ -x /usr/bin/post_wan_init.sh ] \&\& /usr/bin/post_wan_init.sh' "${STORAGE_SH}" 2>/dev/null || \
+        awk '/cat > "\$script_postw" <<EOF/{print; print "[ -x /usr/bin/post_wan_init.sh ] \\&\\& /usr/bin/post_wan_init.sh"; next}1' "${STORAGE_SH}" > "${STORAGE_SH}.tmp" && mv -f "${STORAGE_SH}.tmp" "${STORAGE_SH}"
         echo "    已将 post_wan_init.sh 调用注入到 mtd_storage.sh"
     fi
 fi
