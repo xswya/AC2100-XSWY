@@ -153,7 +153,7 @@ start_firewall() {
     iptables -t nat -N CLASH 2>/dev/null || iptables -t nat -F CLASH
 
     # 关键修复1: 排除路由器自身的管理IP (避免WebUI无法访问)
-    LAN_IP="$(nvram get lan_ipaddr || echo 192.168.123.1)"
+    LAN_IP="$(nvram get lan_ipaddr || echo 192.168.2.1)"
     iptables -t nat -A CLASH -d "${LAN_IP}" -j RETURN
 
     # 保留私网与局域网段
@@ -247,6 +247,44 @@ update_subscription() {
     fi
 
     if [ -s "${TMP_CONF}" ] && grep -qE "(proxies|proxy-providers):" "${TMP_CONF}"; then
+        # 过滤掉广告节点 (名称中包含"防失联"、"官网"、"订阅"等关键词的节点)
+        python3 - "${TMP_CONF}" <<'PYEOF' || true
+import sys, yaml, re
+if len(sys.argv) > 1:
+    try:
+        with open(sys.argv[1], 'r', encoding='utf-8') as f:
+            conf = yaml.safe_load(f)
+
+        # 广告节点关键词
+        ad_keywords = ['防失联', '官网', '订阅', '网址', 'sdfabu', '续费', '流量', '套餐']
+
+        # 过滤 proxies 列表
+        if 'proxies' in conf and isinstance(conf['proxies'], list):
+            original_count = len(conf['proxies'])
+            conf['proxies'] = [
+                p for p in conf['proxies']
+                if not any(kw in p.get('name', '') for kw in ad_keywords)
+            ]
+            filtered_count = original_count - len(conf['proxies'])
+            if filtered_count > 0:
+                print(f'已过滤 {filtered_count} 个广告节点', file=sys.stderr)
+
+        # 更新 proxy-groups 中的节点引用
+        if 'proxy-groups' in conf:
+            valid_proxy_names = {p['name'] for p in conf.get('proxies', [])}
+            for group in conf['proxy-groups']:
+                if 'proxies' in group and isinstance(group['proxies'], list):
+                    group['proxies'] = [
+                        p for p in group['proxies']
+                        if p in valid_proxy_names or p in ['DIRECT', 'REJECT']
+                    ]
+
+        with open(sys.argv[1], 'w', encoding='utf-8') as f:
+            yaml.dump(conf, f, allow_unicode=True)
+    except Exception as e:
+        print(f'过滤节点失败: {e}', file=sys.stderr)
+PYEOF
+
         # 仅删除顶层(无前导空格)的重复 key，保护嵌套在 proxies 节点中的 mode:/secret: 等字段不被误伤
         sed -i '/^external-controller:/d' "${TMP_CONF}" 2>/dev/null || true
         sed -i '/^external-ui:/d' "${TMP_CONF}" 2>/dev/null || true
@@ -396,7 +434,7 @@ YAMLEOF
         # 检测核心是否正常存活
         if kill -0 $(cat "${PID_FILE}" 2>/dev/null) 2>/dev/null; then
             start_firewall
-            LAN_IP="$(nvram get lan_ipaddr || echo 192.168.123.1)"
+            LAN_IP="$(nvram get lan_ipaddr || echo 192.168.2.1)"
             logger -st "ShellCrash" "ShellCrash 核心启动成功！Web 控制面板: http://${LAN_IP}:${PORT_UI}/ui"
         else
             logger -st "ShellCrash" "警告: CrashCore 核心启动异常退出！最近日志:"
