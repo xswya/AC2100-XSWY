@@ -1006,6 +1006,46 @@ if [ -f "${STORAGE_SH}" ]; then
     fi
 fi
 
+# ===============================================================================
+# 7. 让 dnsmasq 基础服务不依赖 /etc/storage 初始化时序
+# ===============================================================================
+# Padavan 的 watchdog 可能在 mtd_storage.sh 完成前启动 dnsmasq。上游
+# services_ex.c 固定引用 /etc/storage/dnsmasq/dnsmasq.conf，导致新刷机或
+# storage 分区为空时 DHCP/DNS 直接失败。将兜底创建放进真正启动 dnsmasq
+# 的 C 路径，SmartDNS/代理等增强服务即使未启动也不会影响基础网络。
+SERVICES_EX="${WORK_DIR}/trunk/user/rc/services_ex.c"
+if [ ! -f "${SERVICES_EX}" ]; then
+    echo "错误: 未找到 services_ex.c，无法安装 dnsmasq 启动兜底" >&2
+    exit 1
+elif ! grep -q "Ensure dnsmasq user configuration exists" "${SERVICES_EX}"; then
+    if awk '
+    /fprintf\(fp, "conf-file=%s\/dnsmasq.conf/ {
+        print "\t/* Ensure dnsmasq user configuration exists before launch. */"
+        print "\t/* /etc/storage may be empty after a fresh flash; never let that"
+        print "\t * prevent the built-in DHCP/DNS service from starting. */"
+        print "\t{"
+        print "\t\tchar user_conf[128];"
+        print "\t\tmkdir_if_none(storage_dir, \"755\");"
+        print "\t\tsnprintf(user_conf, sizeof(user_conf), \"%s/dnsmasq.conf\", storage_dir);"
+        print "\t\tcreate_file(user_conf);"
+        print "\t\tif (check_if_file_exist(user_conf))"
+        print "\t\t\tfprintf(fp, \"conf-file=%s/dnsmasq.conf\\n\", storage_dir);"
+        print "\t}"
+        injected = 1
+        next
+    }
+    { print }
+    END { if (!injected) exit 1 }
+    ' "${SERVICES_EX}" > "${SERVICES_EX}.tmp"; then
+        mv -f "${SERVICES_EX}.tmp" "${SERVICES_EX}"
+        echo "    已将 dnsmasq 空 storage 兜底逻辑注入 services_ex.c"
+    else
+        rm -f "${SERVICES_EX}.tmp"
+        echo "错误: 无法定位 services_ex.c 中的 dnsmasq 用户配置加载点" >&2
+        exit 1
+    fi
+fi
+
 # ==============================================================================
 # 8. 对接 shadowsocks.sh 生命周期
 # ==============================================================================
