@@ -983,6 +983,27 @@ if [ -f "${STORAGE_SH}" ]; then
         fi
         echo "    已将 post_wan_init.sh 调用注入到 mtd_storage.sh"
     fi
+
+    # mtd_storage.sh load 在 watchdog 启动前执行；确保首次启动也创建
+    # /etc/storage/dnsmasq/dnsmasq.conf，而不是等 WAN up 之后才初始化。
+    if ! grep -q "Ensure generated defaults exist before services start" "${STORAGE_SH}"; then
+        awk '
+        /^func_load\(\)/ {
+            print
+            in_func_load = 1
+            next
+        }
+        in_func_load && /^\{/ {
+            print
+            print "\t# Ensure generated defaults exist before services start"
+            print "\tfunc_fill"
+            in_func_load = 0
+            next
+        }
+        { print }
+        ' "${STORAGE_SH}" > "${STORAGE_SH}.tmp" && mv -f "${STORAGE_SH}.tmp" "${STORAGE_SH}"
+        echo "    已将 mtd_storage.sh 的 load 初始化补齐"
+    fi
 fi
 
 # ==============================================================================
